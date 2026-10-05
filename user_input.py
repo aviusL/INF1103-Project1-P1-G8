@@ -1,24 +1,98 @@
 from call_openai import ask_ai
 
 
-print("Inser input here: ")
+print("Insert input here: ")
 
 
 def initial_inputs():
-    age = input("Age: ")
-    gender = input("Gender: ")
-    bmi = input("BMI: ")
-    fitness = input("Fitness level: ")
 
+    # AGE ------------------------
+    while True:
+        try:
+            age = int(input("Age: "))
+            if 13 <= age <= 100:
+                break
+            print("Please enter an age between 13 and 100.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+    # GENDER --------------------
+    while True:
+        gender = input("Gender: Male(M) or Female(F)?  ").strip().lower()
+
+        if gender in ["male", "female", "m", "f"]:
+            break
+
+        print("Please enter male, female, or other.")
+
+    # HEIGHT -----------------
+    while True:
+        try:
+            height = float(input("Height (cm): "))
+
+            if 100 <= height <= 250:
+                break
+
+            print("Please enter a height between 100 and 250.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+    # HEIGHT -----------------
+        while True:
+            try:
+                height = float(input("Height (cm): "))
+    
+                if 100 <= height <= 250:
+                    break
+    
+                print("Please enter a height between 100 and 250.")
+            except ValueError:
+                print("Please enter a valid number.")
+
+    # WEIGHT
+        while True:
+            try:
+                weight = float(input("Weight (kg): "))
+
+                if 30 <= weight <= 300:
+                    break
+
+                print("Please enter a weight between 30 and 300 kg.")
+
+            except ValueError:
+                print("Please enter a valid number.")
+
+    # FITNESS ------------------------
+    while True:
+        fitness = int(input("Fitness level, pick a number (1-beginner, 2-intermediate, 3-advanced): "))
+
+        if fitness in [1,2,3]:
+            break
+
+        print("Please enter 1 - beginner, 2 - intermediate, or 3 - advanced.")
+
+    # TRAINING GOAL --------------------
     training_goal = input("Training goal: ")
 
-    health_injury_history = input("Health/injury history: ")
+    # HEALTH OR INJURIES HISTORY -----------------
+    while True:
+        health_injury_history = input("Health/injury history (Nil for none): ").strip()
 
+        if health_injury_history:
+            break
+
+        print("Please enter 'none' if you have no health or injury history.")
+
+    # AVAILABLE EQUIPMENT -------------------
     avail_equipment = input("Available equipment: ")
 
+    # AVAILABLE DAY AND TIMES
     avail_days = input("Available days and times: ")
 
     return age,gender,bmi,fitness,training_goal,health_injury_history,avail_equipment,avail_days
+
+
+
 
 
 
@@ -76,6 +150,7 @@ INSTRUCTIONS
 8. Include rest or recovery when appropriate.
 9. Keep the plan realistic for the user's current fitness level.
 10. Do not diagnose injuries or medical conditions. If the reported pain could make training unsafe, clearly recommend seeking advice from a qualified healthcare professional.
+11. fitness level numbers represents: 1 - beginner, 2 - intermediate, or 3 - advanced.
 
 OUTPUT FORMAT
 -------------
