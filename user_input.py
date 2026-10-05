@@ -37,30 +37,18 @@ def initial_inputs():
         except ValueError:
             print("Please enter a valid number.")
 
-    # HEIGHT -----------------
-        while True:
-            try:
-                height = float(input("Height (cm): "))
-    
-                if 100 <= height <= 250:
-                    break
-    
-                print("Please enter a height between 100 and 250.")
-            except ValueError:
-                print("Please enter a valid number.")
-
     # WEIGHT
-        while True:
-            try:
-                weight = float(input("Weight (kg): "))
+    while True:
+        try:
+            weight = float(input("Weight (kg): "))
 
-                if 30 <= weight <= 300:
-                    break
+            if 30 <= weight <= 300:
+                break
 
-                print("Please enter a weight between 30 and 300 kg.")
+            print("Please enter a weight between 30 and 300 kg.")
 
-            except ValueError:
-                print("Please enter a valid number.")
+        except ValueError:
+            print("Please enter a valid number.")
 
     # FITNESS ------------------------
     while True:
@@ -76,7 +64,7 @@ def initial_inputs():
 
     # HEALTH OR INJURIES HISTORY -----------------
     while True:
-        health_injury_history = input("Health/injury history (Nil for none): ").strip()
+        health_injury_history = input("Health/injury history (Nil or n for none): ").strip()
 
         if health_injury_history:
             break
@@ -89,10 +77,73 @@ def initial_inputs():
     # AVAILABLE DAY AND TIMES
     avail_days = input("Available days and times: ")
 
-    return age,gender,bmi,fitness,training_goal,health_injury_history,avail_equipment,avail_days
+    return age,gender,height,weight,fitness,training_goal,health_injury_history,avail_equipment,avail_days
 
 
 
+
+def post_exercise_feedback():
+    # PACE
+    while True:
+        try:
+            pace = float(input("Average pace (min/km): "))
+
+            if 2 <= pace <= 20:
+                break
+
+            print("Please enter a pace between 2 and 20 min/km.")
+
+        except ValueError:
+            print("Please enter a valid number.")
+
+
+    # HEART RATE
+    while True:
+        try:
+            heart_rate = int(input("Average heart rate (bpm): "))
+
+            if 40 <= heart_rate <= 220:
+                break
+
+            print("Please enter a heart rate between 40 and 220 bpm.")
+
+        except ValueError:
+            print("Please enter a valid number.")
+
+
+    # RPE
+    while True:
+        try:
+            rpe = int(input("Rate of perceived exertion (1-10): "))
+
+            if 1 <= rpe <= 10:
+                break
+
+            print("RPE must be between 1 and 10.")
+
+        except ValueError:
+            print("Please enter a whole number from 1 to 10.")
+
+
+    # PAIN / DISCOMFORT
+    pain = input(
+        "Any pain or discomfort? "
+    ).strip()
+
+    if not pain:
+        pain = "None"
+
+
+    # COMMENTS
+    comments = input(
+        "How did the session feel? "
+    ).strip()
+
+    if not comments:
+        comments = "No comments"
+
+
+    return pace, heart_rate, rpe, pain, comments
 
 
 
@@ -100,7 +151,8 @@ def initial_inputs():
 (
     age,
     gender,
-    bmi,
+    height,
+    weight,
     fitness,
     training_goal,
     health_injury_history,
@@ -110,7 +162,14 @@ def initial_inputs():
 
 
 
-prompt = f"""
+# POST EXERCISE INPUTS -------------------
+(
+    pace,heart_rate,rpe,pain,comments 
+) = post_exercise_feedback()
+
+
+# INITIAL PROMPT SETTINGS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+prompt_initial = f"""
 You are a fitness planning assistant.
 
 Create a safe and realistic training plan based ONLY on the user's information below.
@@ -119,7 +178,8 @@ INITIAL USER INFORMATION
 ---------------
 Age: {age}
 Gender: {gender}
-BMI: {bmi}
+Height: {height}
+Weight: {weight}
 Fitness level: {fitness}
 
 GOAL
@@ -173,6 +233,27 @@ After the sessions, provide:
 Keep the response concise and practical.
 """
 
-result = ask_ai(prompt)
+# POST EXERCISE PROMPT SETTING>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+post_exercise_prompt = f"""
 
-print(result)
+Determine and feedback on user post-exercise data
+pace {pace}, 
+heart_rate {heart_rate}, 
+rpe {rpe} , 
+pain {pain}, 
+comments {comments}
+
+
+"""
+
+
+
+# Get Input From User.
+
+initial_result = ask_ai(prompt_initial)
+print(initial_result)
+
+# Post Exercise Feedback.
+post_exercise_feedback()
+post_result = ask_ai(post_exercise_prompt)
+print(post_result)
