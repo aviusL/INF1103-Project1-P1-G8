@@ -238,6 +238,13 @@ def prompt_profile():
     }
 
 
+def prompt_accept_or_reject():
+    """Returns (accepted, reason)."""
+    if prompt_yes_no("Accept this session?"):
+        return True, None
+    return False, prompt_required_text("Why are you rejecting it? (the coach will adapt)")
+
+
 def prompt_session_log():
     show_message("\nHow did the session go?")
     return {
