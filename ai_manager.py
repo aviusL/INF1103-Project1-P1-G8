@@ -48,3 +48,23 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
   "rationale": "string, 1-3 sentences explaining why this session fits the user now",
   "risk_level": "low" | "medium" | "high"
 }"""
+
+
+def build_user_prompt(profile, history, user_feedback=None, rule_feedback=None):  #what claude is being asked
+    payload = {
+        "profile": profile, #age, weight, fitness level, health concerns, goals
+        "recent_sessions": history, #last 5 sessions, planned vs actual: pace, heart rate, RPE, pain/discomfort, comments
+        "user_rejection_reason": user_feedback, #none unless someone rejected a previous suggestion, then it's the reason they gave
+        "safety_rule_violations_to_fix": rule_feedback, #none unless logic layer rejetcs the prev draft
+    }
+    return "Plan the next session for this user:\n" + json.dumps(payload, indent=2)
+
+
+def extract_json_text(text):
+    #strip code fences / surrounding chatter and return the json substring.
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return text
+    return text[start:end + 1]
