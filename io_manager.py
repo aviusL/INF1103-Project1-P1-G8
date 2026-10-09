@@ -1,5 +1,6 @@
-from call_openai import ask_ai
+"""io_manager.py - Input layer: every print() and input() in the system lives here."""
 
+FITNESS_LEVELS = ("beginner", "intermediate", "advanced")
 
 # --------- OUTPUT -------------------
 def show_message(text):
@@ -149,88 +150,17 @@ def initial_inputs():
 
 
 
-def post_exercise_feedback():
 
-    print("How did the session go?")
-
-
-
-    # PACE
-    while True:
-        try:
-            pace = float(input("Average pace (min/km): "))
-
-            if 2 <= pace <= 20:
-                break
-
-            print("Please enter a pace between 2 and 20 min/km.")
-
-        except ValueError:
-            print("Please enter a valid number.")
-
-
-    # HEART RATE
-    while True:
-        try:
-            heart_rate = int(input("Average heart rate (bpm): "))
-
-            if 40 <= heart_rate <= 220:
-                break
-
-            print("Please enter a heart rate between 40 and 220 bpm.")
-
-        except ValueError:
-            print("Please enter a valid number.")
-
-
-    # RPE
-    while True:
-        try:
-            rpe = int(input("Rate of perceived exertion (1-10): "))
-
-            if 1 <= rpe <= 10:
-                break
-
-            print("RPE must be between 1 and 10.")
-
-        except ValueError:
-            print("Please enter a whole number from 1 to 10.")
-
-
-    # PAIN / DISCOMFORT
-    pain = input(
-        "Any pain or discomfort? "
-    ).strip()
-
-    if not pain:
-        pain = "None"
-
-
-    # COMMENTS
-    comments = input(
-        "How did the session feel? "
-    ).strip()
-
-    if not comments:
-        comments = "No comments"
-
-
-    return pace, heart_rate, rpe, pain, comments
-
-
-
-# GET THE INPUTS ----------------------
-(
-    age,
-    gender,
-    height,
-    weight,
-    fitness,
-    training_goal,
-    health_injury_history,
-    avail_equipment,
-    avail_days
-) = initial_inputs()
+def prompt_session_log():
+    show_message("\nHow did the session go?")
+    return {
+        "duration_min": prompt_int("Actual duration in minutes", 1, 300),
+        "avg_pace_min_per_km": prompt_float("Average pace in min/km", 2, 30, allow_blank=True),
+        "avg_hr_bpm": prompt_int("Average heart rate (bpm)", 30, 230),
+        "rpe": prompt_int("Rate of perceived exertion", 1, 10),
+        "pain_reported": prompt_yes_no("Any pain or discomfort?"),
+        "comments": prompt_text("Comments (pain, discomfort, how it felt)", ""),
+    }
 
 
 
@@ -292,27 +222,7 @@ def prompt_session_log():
         "comments": prompt_text("Comments (pain, discomfort, how it felt)", ""),
     }
 
-# POST EXERCISE PROMPT SETTING>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-post_exercise_prompt = f"""
-
-Determine and feedback on user post-exercise data
-pace {pace}, 
-heart_rate {heart_rate}, 
-rpe {rpe} , 
-pain {pain}, 
-comments {comments}
-
-
-"""
 
 
 
-# Get Input From User.
 
-initial_result = ask_ai(prompt_initial)
-print(initial_result)
-
-# Post Exercise Feedback. details saved to database
-post_exercise_feedback()
-post_result = ask_ai(post_exercise_prompt)
-print(post_result)
