@@ -1,73 +1,50 @@
-import time
-from google import genai
+import json
+import logging
+import os
+import re
 
-# Models to attempt, in order of preference
-MODELS = ["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+logger = logging.getLogger("ai_manager")
 
-def send_message_with_retry(chat, message, max_retries=3):
-    """Sends a message with automatic exponential backoff on 503 errors."""
-    for attempt in range(max_retries):
-        try:
-            return chat.send_message(message)
-        except Exception as e:
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                wait_time = (attempt + 1) * 3
-                print(f"\n[Server busy (503). Retrying in {wait_time}s... (Attempt {attempt + 1}/{max_retries})]")
-                time.sleep(wait_time)
-            else:
-                raise e
-    raise Exception("Model remains unavailable after multiple retries.")
+MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+API_TIMEOUT_SECONDS = 30.0
+MAX_SCHEMA_ATTEMPTS = 2
 
-def main():
-    api_key = "AQ.Ab8RN6KE6UJgp8-o97gMkfOVpwEc8tOSYWMi6ukGCr47KpqWhg"
-    client = genai.Client(api_key=api_key)
-    
-    chat = None
-    active_model = ""
+INTENSITY_VALUES = ("low", "moderate", "high")
+RISK_VALUES = ("low", "medium", "high")
 
-    # Attempt to initialize with the best available model
-    for model_name in MODELS:
-        try:
-            print(f"Connecting to {model_name}...")
-            test_chat = client.chats.create(model=model_name)
-            # Test connection with a lightweight check
-            test_chat.send_message("hi")
-            chat = test_chat
-            active_model = model_name
-            print(f"Successfully connected to {active_model}!\n")
-            break
-        except Exception as e:
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                print(f"Model {model_name} is currently busy. Trying alternative model...")
-                continue
-            elif "404" in str(e):
-                continue
-            else:
-                print(f"Error on {model_name}: {e}")
+# field name -> allowed python types
+RESPONSE_SCHEMA = {
+    "exercise_type": (str,),
+    "duration_min": (int, float),
+    "intensity": (str,),
+    "target_hr_bpm": (int, float),
+    "target_pace_min_per_km": (int, float, type(None)),
+    "warmup": (str,),
+    "main_set": (str,),
+    "cooldown": (str,),
+    "rationale": (str,),
+    "risk_level": (str,),
+}
 
-    if not chat:
-        print("\nAll model endpoints are currently experiencing high demand. Please wait 2-3 minutes and try again.")
-        return
+SYSTEM_PROMPT = """You are an exercise-planning assistant inside a fitness coaching app.
+You receive a JSON payload with the user's profile, their recent session history
+(planned vs actual: pace, heart rate, RPE, pain/discomfort, comments), and optionally
+a reason the user rejected a previous suggestion and/or safety-rule violations to fix.
 
-    print("=== Gemini in VS Code ===")
-    print("Type 'quit' or 'exit' to end the conversation.\n")
+Design the user's NEXT single exercise session. Adapt to how recent sessions actually went:
+progress gradually when sessions felt easy, ease off after high RPE, pain or discomfort,
+and respect any health concerns and the user's goal.
 
-    while True:
-        user_input = input("You: ")
-        
-        if user_input.lower() in ['quit', 'exit']:
-            print("Ending chat. Goodbye!")
-            break
-            
-        if not user_input.strip():
-            continue
-
-        try:
-            response = send_message_with_retry(chat, user_input)
-            print(f"\nGemini ({active_model}): {response.text}\n")
-            print("-" * 40)
-        except Exception as e:
-            print(f"\nCould not complete request: {e}\n")
-
-if __name__ == "__main__":
-    main()
+Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
+{
+  "exercise_type": "string, e.g. easy run, intervals, cycling, strength",
+  "duration_min": number,
+  "intensity": "low" | "moderate" | "high",
+  "target_hr_bpm": number,
+  "target_pace_min_per_km": number or null,
+  "warmup": "string",
+  "main_set": "string",
+  "cooldown": "string",
+  "rationale": "string, 1-3 sentences explaining why this session fits the user now",
+  "risk_level": "low" | "medium" | "high"
+}"""
