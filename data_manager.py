@@ -10,7 +10,7 @@ LOG_FILE = os.environ.get("FITNESS_LOG_FILE", "data/app.log")
 
 
 def setup_logging():
-    """Send log output to a file so nothing is printed outside io_manager."""
+    #Sends log output to file so that nothing is printed outside io_manager.
     os.makedirs(os.path.dirname(LOG_FILE) or ".", exist_ok=True)
     logging.basicConfig(
         filename=LOG_FILE,
@@ -35,10 +35,45 @@ def is_valid_store(store):
 
 
 def backup_corrupt_file(path):
-    """Move a corrupt file aside so it is never silently overwritten."""
+    #Move a corrupt file aside so it is never silently overwritten.
     backup = "{}.corrupt-{}".format(path, int(time.time()))
     try:
         os.replace(path, backup)
         logger.error("Corrupt data file moved to %s", backup)
     except OSError as exc:
         logger.error("Could not back up corrupt file %s: %s", path, exc)
+
+def load_data(path=None):
+    #Checks for json file to read, and ensures that the file is not corrupted
+    path = path or DATA_FILE
+    if not os.path.exists(path):
+        logger.info("No data file at %s; starting fresh", path)
+        return empty_store(), "missing"
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            store = json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+        logger.error("Failed to read %s: %s", path, exc)
+        backup_corrupt_file(path)
+        return empty_store(), "corrupt"
+    if not is_valid_store(store):
+        logger.error("Data file %s has an invalid structure", path)
+        backup_corrupt_file(path)
+        return empty_store(), "corrupt"
+    store.setdefault("pending_session", None)
+    return store, "ok"
+
+
+def save_data(store, path=None):
+    #Writes a temporary file (.tmp) and replaced the original file with the temporary file. Returns True on success.
+    path = path or DATA_FILE
+    tmp_path = path + ".tmp"
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(store, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+        return True
+    except OSError as exc:
+        logger.error("Failed to save %s: %s", path, exc)
+        return False
