@@ -25,6 +25,43 @@ def show_load_status(status):
         show_message("No saved data found - please run initial setup.")
 
 
+def format_suggestion(s):
+    pace = "n/a" if s["target_pace_min_per_km"] is None else "{} min/km".format(s["target_pace_min_per_km"])
+    return "\n".join([
+        "--- Suggested session ---",
+        "Type:      {}".format(s["exercise_type"]),
+        "Duration:  {} min   Intensity: {}   Risk: {}".format(s["duration_min"], s["intensity"], s["risk_level"]),
+        "Target:    {} bpm, pace {}".format(s["target_hr_bpm"], pace),
+        "Warm-up:   {}".format(s["warmup"]),
+        "Main set:  {}".format(s["main_set"]),
+        "Cool-down: {}".format(s["cooldown"]),
+        "Why:       {}".format(s["rationale"]),
+    ])
+
+
+def show_suggestion(suggestion, decision):
+    print(format_suggestion(suggestion))
+    if decision["outcome"] == "flag":
+        print("Warnings (score {}/100):".format(decision["score"]))
+        for reason in decision["reasons"]:
+            print("  - " + reason)
+
+
+def format_session_record(record):
+    actual = record["actual"]
+    pace = "n/a" if actual.get("avg_pace_min_per_km") is None else "{} min/km".format(actual["avg_pace_min_per_km"])
+    pain = "pain reported" if actual.get("pain_reported") else "no pain"
+    return "#{} {} | planned {} | actual {} min, {}, {} bpm, RPE {}, {} | {}".format(
+        record["id"], record["date"], record["planned"]["exercise_type"], actual["duration_min"],
+        pace, actual["avg_hr_bpm"], actual["rpe"], pain, actual.get("comments") or "-")
+
+
+def show_history(records):
+    if not records:
+        print("No matching sessions yet.")
+        return
+    for record in records:
+        print(format_session_record(record))
 
 
 
