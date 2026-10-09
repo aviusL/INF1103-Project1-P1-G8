@@ -235,75 +235,62 @@ def post_exercise_feedback():
 
 
 # POST EXERCISE INPUTS -------------------
-(
-    pace,heart_rate,rpe,pain,comments 
-) = post_exercise_feedback()
 
 
-# INITIAL PROMPT SETTINGS >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-prompt_initial = f"""
-You are a fitness planning assistant.
+def prompt_yes_no(label):
+    while True:
+        raw = input(label + " (y/n): ").strip().lower()
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        show_error("Please answer y or n.")
 
-Create a safe and realistic training plan based ONLY on the user's information below.
 
-INITIAL USER INFORMATION
----------------
-Age: {age}
-Gender: {gender}
-Height: {height}
-Weight: {weight}
-Fitness level: {fitness}
+def prompt_float(label, low, high, allow_blank=False):
+    while True:
+        raw = input("{} ({}-{}{}): ".format(label, low, high, ", blank = n/a" if allow_blank else "")).strip()
+        if allow_blank and raw == "":
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            show_error("Please enter a number.")
+            continue
+        if low <= value <= high:
+            return value
+        show_error("Value must be between {} and {}.".format(low, high))
 
-GOAL
-----
-{training_goal}
 
-HEALTH AND INJURY HISTORY
--------------------------
-{health_injury_history}
+def prompt_text(label, default=None):
+    suffix = " [{}]".format(default) if default is not None else ""
+    value = input("{}{}: ".format(label, suffix)).strip()
+    return value if value else (default if default is not None else "")
 
-AVAILABLE EQUIPMENT
--------------------
-{avail_equipment}
 
-AVAILABILITY
-------------
-{avail_days}
+def prompt_int(label, low, high):
+    while True:
+        raw = input("{} ({}-{}): ".format(label, low, high)).strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            show_error("Please enter a whole number.")
+            continue
+        if low <= value <= high:
+            return value
+        show_error("Value must be between {} and {}.".format(low, high))
 
-INSTRUCTIONS
-------------
-1. Create a training plan that fits ONLY within the user's stated available days and times.
-2. Respect the user's available equipment. Do not require equipment that is not available.
-3. Take the user's injury history and current comments into account.
-4. Do not prescribe exercises that could unnecessarily aggravate the reported injury or pain.
-5. If an exercise may be unsuitable because of the user's injury history or current pain, replace it with a safer alternative.
-6. The user's primary goal is the main training objective. Structure the plan around progressing toward that goal.
-7. Do not assume the user has additional training time outside the stated availability.
-8. Include rest or recovery when appropriate.
-9. Keep the plan realistic for the user's current fitness level.
-10. Do not diagnose injuries or medical conditions. If the reported pain could make training unsafe, clearly recommend seeking advice from a qualified healthcare professional.
-11. fitness level numbers represents: 1 - beginner, 2 - intermediate, or 3 - advanced.
 
-OUTPUT FORMAT
--------------
-For each training session, provide:
-
-Day:
-Time:
-Workout:
-Duration:
-Intensity:
-Purpose:
-Equipment:
-Safety notes:
-
-After the sessions, provide:
-- Weekly goal
-- Total planned training time
-- Important safety considerations
-
-Keep the response concise and practical.
-"""
+def prompt_session_log():
+    show_message("\nHow did the session go?")
+    return {
+        "duration_min": prompt_int("Actual duration in minutes", 1, 300),
+        "avg_pace_min_per_km": prompt_float("Average pace in min/km", 2, 30, allow_blank=True),
+        "avg_hr_bpm": prompt_int("Average heart rate (bpm)", 30, 230),
+        "rpe": prompt_int("Rate of perceived exertion", 1, 10),
+        "pain_reported": prompt_yes_no("Any pain or discomfort?"),
+        "comments": prompt_text("Comments (pain, discomfort, how it felt)", ""),
+    }
 
 # POST EXERCISE PROMPT SETTING>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 post_exercise_prompt = f"""
