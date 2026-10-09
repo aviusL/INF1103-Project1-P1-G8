@@ -65,93 +65,6 @@ def show_history(records):
         print(format_session_record(record))
 
 
-
-
-
-
-
-
-def initial_inputs():
-
-    print("Insert input here: ")
-    # AGE ------------------------
-    while True:
-        try:
-            age = int(input("Age: "))
-            if 13 <= age <= 100:
-                break
-            print("Please enter an age between 13 and 100.")
-        except ValueError:
-            print("Please enter a valid number.")
-
-    # GENDER --------------------
-    while True:
-        gender = input("Gender: Male(M) or Female(F)?  ").strip().lower()
-
-        if gender in ["male", "female", "m", "f"]:
-            break
-
-        print("Please enter male, female, or other.")
-
-    # HEIGHT -----------------
-    while True:
-        try:
-            height = float(input("Height (cm): "))
-
-            if 100 <= height <= 250:
-                break
-
-            print("Please enter a height between 100 and 250.")
-        except ValueError:
-            print("Please enter a valid number.")
-
-    # WEIGHT
-    while True:
-        try:
-            weight = float(input("Weight (kg): "))
-
-            if 30 <= weight <= 300:
-                break
-
-            print("Please enter a weight between 30 and 300 kg.")
-
-        except ValueError:
-            print("Please enter a valid number.")
-
-    # FITNESS ------------------------
-    while True:
-        fitness = int(input("Fitness level, pick a number (1-beginner, 2-intermediate, 3-advanced): "))
-
-        if fitness in [1,2,3]:
-            break
-
-        print("Please enter 1 - beginner, 2 - intermediate, or 3 - advanced.")
-
-    # TRAINING GOAL --------------------
-    training_goal = input("Training goal: ")
-
-    # HEALTH OR INJURIES HISTORY -----------------
-    while True:
-        health_injury_history = input("Health/injury history (Nil or n for none): ").strip()
-
-        if health_injury_history:
-            break
-
-        print("Please enter 'none' if you have no health or injury history.")
-
-    # AVAILABLE EQUIPMENT -------------------
-    avail_equipment = input("Available equipment: ")
-
-    # AVAILABLE DAY AND TIMES
-    avail_days = input("Available days and times: ")
-
-    return age,gender,height,weight,fitness,training_goal,health_injury_history,avail_equipment,avail_days
-
-
-
-
-
-
 def prompt_yes_no(label):
     while True:
         raw = input(label + " (y/n): ").strip().lower()
@@ -176,6 +89,8 @@ def prompt_float(label, low, high, allow_blank=False):
             return value
         show_error("Value must be between {} and {}.".format(low, high))
 
+
+# ----------- Input functions --------------------
 
 def prompt_text(label, default=None):
     suffix = " [{}]".format(default) if default is not None else ""
