@@ -85,3 +85,17 @@ def validate_schema(data):
     if data["risk_level"] not in RISK_VALUES:
         return "risk_level must be one of {}".format(RISK_VALUES)
     return None
+
+
+def parse_and_validate_response(text): 
+    #takes in the raw text from claude, returns (data, error). 
+    if not isinstance(text, str) or not text.strip(): #returns "empty response" if claude returned nothing
+        return None, "empty response"
+    try:
+        data = json.loads(extract_json_text(text))
+    except json.JSONDecodeError as exc:
+        return None, "invalid JSON: {}".format(exc)
+    error = validate_schema(data)
+    if error:
+        return None, error
+    return data, None
