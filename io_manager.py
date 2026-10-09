@@ -151,21 +151,6 @@ def initial_inputs():
 
 
 
-def prompt_session_log():
-    show_message("\nHow did the session go?")
-    return {
-        "duration_min": prompt_int("Actual duration in minutes", 1, 300),
-        "avg_pace_min_per_km": prompt_float("Average pace in min/km", 2, 30, allow_blank=True),
-        "avg_hr_bpm": prompt_int("Average heart rate (bpm)", 30, 230),
-        "rpe": prompt_int("Rate of perceived exertion", 1, 10),
-        "pain_reported": prompt_yes_no("Any pain or discomfort?"),
-        "comments": prompt_text("Comments (pain, discomfort, how it felt)", ""),
-    }
-
-
-
-# POST EXERCISE INPUTS -------------------
-
 
 def prompt_yes_no(label):
     while True:
@@ -198,6 +183,14 @@ def prompt_text(label, default=None):
     return value if value else (default if default is not None else "")
 
 
+def prompt_required_text(label):
+    while True:
+        value = input(label + ": ").strip()
+        if value:
+            return value
+        show_error("This field cannot be empty.")
+
+
 def prompt_int(label, low, high):
     while True:
         raw = input("{} ({}-{}): ".format(label, low, high)).strip()
@@ -209,6 +202,40 @@ def prompt_int(label, low, high):
         if low <= value <= high:
             return value
         show_error("Value must be between {} and {}.".format(low, high))
+
+
+def prompt_choice(label, options):
+    while True:
+        raw = input("{} ({}): ".format(label, "/".join(options))).strip().lower()
+        if raw in options:
+            return raw
+        show_error("Please choose one of: " + ", ".join(options))
+
+
+def prompt_main_menu(has_profile, has_pending):
+    print("\n1) Initial setup (create/replace profile)")
+    print("2) Get next suggested session")
+    print("3) Log a completed session" + ("  <- you have a session waiting" if has_pending else ""))
+    print("4) View history")
+    print("5) Quit")
+    keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "quit"}
+    while True:
+        raw = input("Choose an option: ").strip()
+        if raw in keys:
+            return keys[raw]
+        show_error("Please enter a number from 1 to 5.")
+
+
+def prompt_profile():
+    show_message("\nLet's set up your profile.")
+    return {
+        "age": prompt_int("Age", 12, 100),
+        "height_cm": prompt_float("Height in cm", 100, 250),
+        "weight_kg": prompt_float("Weight in kg", 30, 250),
+        "fitness_level": prompt_choice("Fitness level", FITNESS_LEVELS),
+        "health_concerns": prompt_text("Prior health concerns / injuries", "none"),
+        "fitness_goal": prompt_required_text("Fitness goal (e.g. run 5k in 30 min)"),
+    }
 
 
 def prompt_session_log():
