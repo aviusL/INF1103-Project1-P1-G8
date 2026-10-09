@@ -68,3 +68,20 @@ def extract_json_text(text):
     if start == -1 or end <= start:
         return text
     return text[start:end + 1]
+
+
+def validate_schema(data):
+    #checks the structure of the json object only, returns an error string or None.
+    if not isinstance(data, dict):
+        return "response is not a JSON object"
+    for field, types in RESPONSE_SCHEMA.items():
+        if field not in data:
+            return "missing field: " + field
+        value = data[field]
+        if isinstance(value, bool) or not isinstance(value, types):
+            return "wrong type for field: " + field
+    if data["intensity"] not in INTENSITY_VALUES:
+        return "intensity must be one of {}".format(INTENSITY_VALUES)
+    if data["risk_level"] not in RISK_VALUES:
+        return "risk_level must be one of {}".format(RISK_VALUES)
+    return None
