@@ -43,6 +43,7 @@ def backup_corrupt_file(path):
     except OSError as exc:
         logger.error("Could not back up corrupt file %s: %s", path, exc)
 
+
 def load_data(path=None):
     #Checks for json file to read, and ensures that the file is not corrupted
     path = path or DATA_FILE
@@ -78,6 +79,7 @@ def save_data(store, path=None):
         logger.error("Failed to save %s: %s", path, exc)
         return False
         
+        
 def set_pending_session(store, suggestion, path=None):
     store["pending_session"] = suggestion
     return save_data(store, path)
@@ -94,3 +96,23 @@ def complete_pending_session(store, actual, path=None):
     store["sessions"].append(record)
     store["pending_session"] = None
     return save_data(store, path)
+
+
+def get_recent_sessions(store, count):
+    #The last `count` sessions - this is what how the AI retreives the recent workouts
+    if count <= 0:
+        return []
+    return store["sessions"][-count:]
+
+
+def filter_sessions(store, min_rpe=None, pain_only=False):
+    #Query function: sessions at/above an RPE and/or with pain reported.
+    results = []
+    for record in store["sessions"]:
+        actual = record.get("actual", {})
+        if min_rpe is not None and actual.get("rpe", 0) < min_rpe:
+            continue
+        if pain_only and not actual.get("pain_reported", False):
+            continue
+        results.append(record)
+    return results
