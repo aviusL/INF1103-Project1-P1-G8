@@ -77,3 +77,20 @@ def save_data(store, path=None):
     except OSError as exc:
         logger.error("Failed to save %s: %s", path, exc)
         return False
+        
+def set_pending_session(store, suggestion, path=None):
+    store["pending_session"] = suggestion
+    return save_data(store, path)
+
+
+def complete_pending_session(store, actual, path=None):
+    #Combines the planned session with how it went, append to history.
+    record = {
+        "id": len(store["sessions"]) + 1,
+        "date": time.strftime("%Y-%m-%d"),
+        "planned": store["pending_session"],
+        "actual": actual,
+    }
+    store["sessions"].append(record)
+    store["pending_session"] = None
+    return save_data(store, path)
