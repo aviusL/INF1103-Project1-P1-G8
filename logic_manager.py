@@ -1,34 +1,31 @@
-"""Logic layer: basic rules and helper functions for running sessions."""
+"""logic_manager.py - Logic layer: business rules on user input and AI output. No console output, no I/O."""
 
-HR_CEILING_FRACTION = 0.90
-HR_FLOOR_FRACTION = 0.40
+HR_CEILING_FRACTION = 0.90      # target HR may not exceed 90% of max HR
+HR_FLOOR_FRACTION = 0.40        # below 40% of max HR is suspiciously easy -> flag
 MIN_DURATION_MIN = 10
 MAX_DURATION_MIN = 120
 BEGINNER_MAX_DURATION_MIN = 60
-MIN_PACE = 3.0
+MIN_PACE = 3.0                  # min/km, faster is not humanly sustainable for our users
 MAX_PACE = 15.0
-PROGRESSION_LIMIT = 1.30
+PROGRESSION_LIMIT = 1.30        # max +30% duration versus the previous session
 HIGH_RPE = 8
 NO_CONCERN_WORDS = ("", "none", "no", "nil", "n/a", "na")
 
 
 def calculate_max_hr(age):
-    """Estimate maximum heart rate from age."""
     return 220 - age
 
 
 def has_health_concerns(profile):
-    """Check whether the user reported any health concerns."""
     return str(profile.get("health_concerns", "")).strip().lower() not in NO_CONCERN_WORDS
 
 
 def last_session(history):
-    """Return the most recent session, or None if history is empty."""
     return history[-1] if history else None
 
 
 def last_session_was_hard(history):
-    """Check if the previous session had high exertion or reported pain."""
+    """True if the previous session had RPE >= 8 or any pain/discomfort reported."""
     last = last_session(history)
     if not last:
         return False
@@ -85,3 +82,27 @@ def collect_flags(session, profile, history):
     if session["risk_level"] == "medium":
         flags.append("the AI rated this session as medium risk")
     return flags
+
+
+def evaluate_session(session, profile, history):
+    """Decide the outcome for an AI-suggested session.
+    Returns {"outcome": "accept"|"flag"|"reject", "reasons": [...], "score": 0-100}."""
+    rejections = collect_rejections(session, profile, history)
+    if rejections:
+        return {"outcome": "reject", "reasons": rejections, "score": 0}
+    flags = collect_flags(session, profile, history)
+    score = max(0, 100 - 20 * len(flags))
+    return {"outcome": "flag" if flags else "accept", "reasons": flags, "score": score}
+
+
+def validate_session_log(log, profile):
+    """Business-rule check of what the user reports. Returns a list of error strings."""
+    errors = []
+    max_hr = calculate_max_hr(profile["age"])
+    pace = log.get("avg_pace_min_per_km")
+    if pace is not None and pace < MIN_PACE:
+        errors.append("an average pace of {} min/km is not realistic".format(pace))
+    if log["avg_hr_bpm"] > max_hr + 10:
+        errors.append("average heart rate {} bpm is far above your estimated max ({})".format(
+            log["avg_hr_bpm"], max_hr))
+    return errors
