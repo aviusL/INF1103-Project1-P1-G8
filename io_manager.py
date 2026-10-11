@@ -95,8 +95,6 @@ def prompt_float(label, low, high, allow_blank=False):
         show_error("Value must be between {} and {}.".format(low, high))
 
 
-# ----------- Input functions --------------------
-
 def prompt_text(label, default=None):
     suffix = " [{}]".format(default) if default is not None else ""
     value = input("{}{}: ".format(label, suffix)).strip()
