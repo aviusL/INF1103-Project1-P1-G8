@@ -99,3 +99,55 @@ def parse_and_validate_response(text):
     if error:
         return None, error
     return data, None
+
+
+def call_claude(system_prompt, user_prompt):
+    #single API call. Returns (text, error_message). Never raises.
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None, "ANTHROPIC_API_KEY is not set"
+    try:
+        import anthropic
+    except ImportError:
+        return None, "the 'anthropic' package is not installed"
+    try:
+        client = anthropic.Anthropic(timeout=API_TIMEOUT_SECONDS, max_retries=2)
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=1000,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text = "".join(b.text for b in response.content if b.type == "text")
+        return text, None
+    except anthropic.APITimeoutError:
+        logger.error("Claude API timed out")
+        return None, "the AI service timed out"
+    except anthropic.APIConnectionError as exc:
+        logger.error("Claude API connection failure: %s", exc)
+        return None, "could not connect to the AI service"
+    except anthropic.APIStatusError as exc:
+        logger.error("Claude API status error %s: %s", exc.status_code, exc)
+        return None, "the AI service returned an error (HTTP {})".format(exc.status_code)
+    except Exception as exc:  # last resort: the app must never crash on an AI failure
+        logger.exception("Unexpected AI error: %s", exc)
+        return None, "unexpected AI error"
+
+
+def request_session(profile, history, user_feedback=None, rule_feedback=None):
+    #ask Claude for the next session.
+    #returns {"ok": bool, "data": dict|None, "error": str|None}.
+    base_prompt = build_user_prompt(profile, history, user_feedback, rule_feedback)
+    prompt = base_prompt
+    last_error = "unknown error"
+    for attempt in range(1, MAX_SCHEMA_ATTEMPTS + 1):
+        text, api_error = call_claude(SYSTEM_PROMPT, prompt)
+        if api_error:
+            return {"ok": False, "data": None, "error": api_error}
+        data, schema_error = parse_and_validate_response(text)
+        if schema_error is None:
+            return {"ok": True, "data": data, "error": None}
+        last_error = schema_error
+        logger.warning("Malformed AI output (attempt %d): %s", attempt, schema_error)
+        prompt = (base_prompt + "\n\nYour previous reply was rejected: " + schema_error +
+                  ". Reply with ONLY the JSON object in the required shape.")
+    return {"ok": False, "data": None, "error": "AI returned malformed output: " + last_error}
