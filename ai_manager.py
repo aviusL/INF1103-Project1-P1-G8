@@ -100,6 +100,8 @@ def validate_schema(data):
         value = data[field]
         if isinstance(value, bool) or not isinstance(value, types):
             return "wrong type for field: " + field
+    if not all(isinstance(item, str) for item in data["equipment_used"]):
+        return "equipment_used must be a list of strings"
     if data["intensity"] not in INTENSITY_VALUES:
         return "intensity must be one of {}".format(INTENSITY_VALUES)
     if data["risk_level"] not in RISK_VALUES:
@@ -153,10 +155,10 @@ def call_claude(system_prompt, user_prompt):
         return None, "unexpected AI error"
 
 
-def request_session(profile, history, user_feedback=None, rule_feedback=None):
+def request_session(profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
     """Ask Claude for the next session.
     Returns {"ok": bool, "data": dict|None, "error": str|None}."""
-    base_prompt = build_user_prompt(profile, history, user_feedback, rule_feedback)
+    base_prompt = build_user_prompt(profile, history, user_feedback, rule_feedback, weekly_target)
     prompt = base_prompt
     last_error = "unknown error"
     for attempt in range(1, MAX_SCHEMA_ATTEMPTS + 1):
