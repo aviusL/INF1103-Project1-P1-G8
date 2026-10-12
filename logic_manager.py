@@ -33,6 +33,7 @@ WEEKLY_PATTERNS = {
     7: ("high", "low", "moderate", "low", "moderate", "low", "low"),
 }
 
+
 def calculate_max_hr(age):
     return 220 - age
 
@@ -52,6 +53,7 @@ def last_session_was_hard(history):
         return False
     actual = last.get("actual", {})
     return actual.get("rpe", 0) >= HIGH_RPE or bool(actual.get("pain_reported", False))
+
 
 def last_planned_was_high(history):
     last = last_session(history)
@@ -171,6 +173,25 @@ def collect_rejections(session, profile, history, weekly_target=None):
     last = last_session(history)
     if last and last.get("planned", {}).get("intensity") == "high" and intensity == "high":
         reasons.append("two high-intensity sessions in a row are not allowed")
+
+    # rules from the user's profile: activities chosen, time available, equipment owned, weekly plan
+    usable = usable_activities(profile)
+    activity = str(session.get("activity", "")).strip().lower()
+    if usable is not None and activity not in usable:
+        reasons.append("activity '{}' is not one of the user's usable chosen activities ({})".format(
+            activity, ", ".join(usable) or "none"))
+    minutes = available_minutes(profile)
+    if duration > minutes:
+        reasons.append("duration {} min is longer than the {} min the user has available".format(
+            duration, minutes))
+    used = {str(item).strip().lower() for item in session.get("equipment_used", [])}
+    missing = sorted(item for item in used if item and item not in available_equipment(profile))
+    if missing:
+        reasons.append("session uses equipment the user does not have: " + ", ".join(missing))
+    if weekly_target and INTENSITY_RANK[intensity] > INTENSITY_RANK[weekly_target["intensity"]]:
+        reasons.append("intensity {} is above this week's plan for session {} of {} (target: {})".format(
+            intensity, weekly_target["session_number"], weekly_target["sessions_per_week"],
+            weekly_target["intensity"]))
     return reasons
 
 
@@ -190,10 +211,10 @@ def collect_flags(session, profile, history):
     return flags
 
 
-def evaluate_session(session, profile, history):
+def evaluate_session(session, profile, history, weekly_target=None):
     """Decide the outcome for an AI-suggested session.
     Returns {"outcome": "accept"|"flag"|"reject", "reasons": [...], "score": 0-100}."""
-    rejections = collect_rejections(session, profile, history)
+    rejections = collect_rejections(session, profile, history, weekly_target)
     if rejections:
         return {"outcome": "reject", "reasons": rejections, "score": 0}
     flags = collect_flags(session, profile, history)
