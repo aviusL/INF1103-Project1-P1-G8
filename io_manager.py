@@ -2,7 +2,8 @@
 
 FITNESS_LEVELS = ("beginner", "intermediate", "advanced")
 
-# --------- OUTPUT -------------------
+
+# ---------- output ----------
 def show_message(text):
     print(text)
 
@@ -65,36 +66,7 @@ def show_history(records):
         print(format_session_record(record))
 
 
-# -----------------INPUTS---------------------------------
-
-
-
-
-def prompt_yes_no(label):
-    while True:
-        raw = input(label + " (y/n): ").strip().lower()
-        if raw in ("y", "yes"):
-            return True
-        if raw in ("n", "no"):
-            return False
-        show_error("Please answer y or n.")
-
-
-def prompt_float(label, low, high, allow_blank=False):
-    while True:
-        raw = input("{} ({}-{}{}): ".format(label, low, high, ", blank = n/a" if allow_blank else "")).strip()
-        if allow_blank and raw == "":
-            return None
-        try:
-            value = float(raw)
-        except ValueError:
-            show_error("Please enter a number.")
-            continue
-        if low <= value <= high:
-            return value
-        show_error("Value must be between {} and {}.".format(low, high))
-
-
+# ---------- validated input ----------
 def prompt_text(label, default=None):
     suffix = " [{}]".format(default) if default is not None else ""
     value = input("{}{}: ".format(label, suffix)).strip()
@@ -122,12 +94,37 @@ def prompt_int(label, low, high):
         show_error("Value must be between {} and {}.".format(low, high))
 
 
+def prompt_float(label, low, high, allow_blank=False):
+    while True:
+        raw = input("{} ({}-{}{}): ".format(label, low, high, ", blank = n/a" if allow_blank else "")).strip()
+        if allow_blank and raw == "":
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            show_error("Please enter a number.")
+            continue
+        if low <= value <= high:
+            return value
+        show_error("Value must be between {} and {}.".format(low, high))
+
+
 def prompt_choice(label, options):
     while True:
         raw = input("{} ({}): ".format(label, "/".join(options))).strip().lower()
         if raw in options:
             return raw
         show_error("Please choose one of: " + ", ".join(options))
+
+
+def prompt_yes_no(label):
+    while True:
+        raw = input(label + " (y/n): ").strip().lower()
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        show_error("Please answer y or n.")
 
 
 def prompt_main_menu(has_profile, has_pending):
@@ -173,8 +170,3 @@ def prompt_session_log():
         "pain_reported": prompt_yes_no("Any pain or discomfort?"),
         "comments": prompt_text("Comments (pain, discomfort, how it felt)", ""),
     }
-
-
-
-
-

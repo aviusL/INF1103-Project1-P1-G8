@@ -1,3 +1,4 @@
+"""ai_manager.py - AI layer: talks to Claude only. No domain/business rules, no console output."""
 import json
 import logging
 import os
@@ -50,18 +51,18 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
 }"""
 
 
-def build_user_prompt(profile, history, user_feedback=None, rule_feedback=None):  #what claude is being asked
+def build_user_prompt(profile, history, user_feedback=None, rule_feedback=None):
     payload = {
-        "profile": profile, #age, weight, fitness level, health concerns, goals
-        "recent_sessions": history, #last 5 sessions, planned vs actual: pace, heart rate, RPE, pain/discomfort, comments
-        "user_rejection_reason": user_feedback, #none unless someone rejected a previous suggestion, then it's the reason they gave
-        "safety_rule_violations_to_fix": rule_feedback, #none unless logic layer rejetcs the prev draft
+        "profile": profile,
+        "recent_sessions": history,
+        "user_rejection_reason": user_feedback,
+        "safety_rule_violations_to_fix": rule_feedback,
     }
     return "Plan the next session for this user:\n" + json.dumps(payload, indent=2)
 
 
 def extract_json_text(text):
-    #strip code fences / surrounding chatter and return the json substring.
+    """Strip code fences / surrounding chatter and return the JSON substring."""
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     start, end = text.find("{"), text.rfind("}")
@@ -71,7 +72,7 @@ def extract_json_text(text):
 
 
 def validate_schema(data):
-    #checks the structure of the json object only, returns an error string or None.
+    """Structural validation only. Returns an error string or None."""
     if not isinstance(data, dict):
         return "response is not a JSON object"
     for field, types in RESPONSE_SCHEMA.items():
@@ -87,9 +88,9 @@ def validate_schema(data):
     return None
 
 
-def parse_and_validate_response(text): 
-    #takes in the raw text from claude, returns (data, error). 
-    if not isinstance(text, str) or not text.strip(): #returns "empty response" if claude returned nothing
+def parse_and_validate_response(text):
+    """Return (data, error). Exactly one of them is None."""
+    if not isinstance(text, str) or not text.strip():
         return None, "empty response"
     try:
         data = json.loads(extract_json_text(text))
@@ -102,7 +103,7 @@ def parse_and_validate_response(text):
 
 
 def call_claude(system_prompt, user_prompt):
-    #single API call. Returns (text, error_message). Never raises.
+    """Single API call. Returns (text, error_message). Never raises."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return None, "ANTHROPIC_API_KEY is not set"
     try:
@@ -134,8 +135,8 @@ def call_claude(system_prompt, user_prompt):
 
 
 def request_session(profile, history, user_feedback=None, rule_feedback=None):
-    #ask Claude for the next session.
-    #returns {"ok": bool, "data": dict|None, "error": str|None}.
+    """Ask Claude for the next session.
+    Returns {"ok": bool, "data": dict|None, "error": str|None}."""
     base_prompt = build_user_prompt(profile, history, user_feedback, rule_feedback)
     prompt = base_prompt
     last_error = "unknown error"

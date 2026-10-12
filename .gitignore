@@ -1,1 +1,6 @@
 ﻿/.vs
+
+data/
+.env
+__pycache__/
+*.corrupt-*
