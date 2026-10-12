@@ -9,17 +9,26 @@ MAX_AI_ATTEMPTS = 3       # AI re-tries after the logic layer rejects its output
 MAX_USER_REJECTIONS = 3
 
 
-def generate_valid_session(store, user_feedback=None):
+def current_weekly_target(store):
+    """Where the next session sits in the user's week (sessions already logged this week)."""
+    history = data_manager.get_recent_sessions(store, HISTORY_WINDOW)
+    done = data_manager.sessions_this_week(store)
+    return logic_manager.weekly_target(store["profile"], done, history)
+
+
+def generate_valid_session(store, user_feedback=None, weekly_target=None):
     """AI -> logic loop. Returns (suggestion, decision) or (None, None)."""
     profile = store["profile"]
     history = data_manager.get_recent_sessions(store, HISTORY_WINDOW)
+    if weekly_target is None:
+        weekly_target = current_weekly_target(store)
     rule_feedback = None
     for _ in range(MAX_AI_ATTEMPTS):
-        result = ai_manager.request_session(profile, history, user_feedback, rule_feedback)
+        result = ai_manager.request_session(profile, history, user_feedback, rule_feedback, weekly_target)
         if not result["ok"]:
             io_manager.show_error("Coach unavailable: {}. Please try again later.".format(result["error"]))
             return None, None
-        decision = logic_manager.evaluate_session(result["data"], profile, history)
+        decision = logic_manager.evaluate_session(result["data"], profile, history, weekly_target)
         if decision["outcome"] != "reject":
             return result["data"], decision
         rule_feedback = decision["reasons"]
