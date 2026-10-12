@@ -4,11 +4,10 @@ FITNESS_LEVELS = ("beginner", "intermediate", "advanced")
 SEX_OPTIONS = ("male", "female")
 EQUIPMENT_OPTIONS = (
     "dumbbells", "barbell", "kettlebell", "resistance bands", "pull-up bar", "bench",
-    "treadmill", "stationary bike", "rowing machine", "jump rope", "yoga mat",
-    "bicycle", "swimming pool",
+    "treadmill", "stationary bike", "rowing machine", "jump rope", "bicycle", "swimming pool",
 )
 ACTIVITY_OPTIONS = (
-    "running", "cycling", "swimming", "walking", "strength training", "hiit", "yoga", "rowing",
+    "running", "cycling", "swimming", "walking", "strength training", "hiit", "rowing",
 )
 
 
