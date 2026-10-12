@@ -1,7 +1,15 @@
 """io_manager.py - Input layer: every print() and input() in the system lives here."""
 
 FITNESS_LEVELS = ("beginner", "intermediate", "advanced")
-
+SEX_OPTIONS = ("male", "female")
+EQUIPMENT_OPTIONS = (
+    "dumbbells", "barbell", "kettlebell", "resistance bands", "pull-up bar", "bench",
+    "treadmill", "stationary bike", "rowing machine", "jump rope", "yoga mat",
+    "bicycle", "swimming pool",
+)
+ACTIVITY_OPTIONS = (
+    "running", "cycling", "swimming", "walking", "strength training", "hiit", "yoga", "rowing",
+)
 
 # ---------- output ----------
 def show_message(text):
@@ -31,14 +39,28 @@ def format_suggestion(s):
     pace = "n/a" if s["target_pace_min_per_km"] is None else "{} min/km".format(s["target_pace_min_per_km"])
     return "\n".join([
         "--- Suggested session ---",
+        "Activity:  {}".format(s.get("activity", "n/a")),
         "Type:      {}".format(s["exercise_type"]),
         "Duration:  {} min   Intensity: {}   Risk: {}".format(s["duration_min"], s["intensity"], s["risk_level"]),
         "Target:    {} bpm, pace {}".format(s["target_hr_bpm"], pace),
+        "Equipment: {}".format(", ".join(s.get("equipment_used") or ["bodyweight"])),
         "Warm-up:   {}".format(s["warmup"]),
         "Main set:  {}".format(s["main_set"]),
         "Cool-down: {}".format(s["cooldown"]),
         "Why:       {}".format(s["rationale"]),
     ])
+
+
+def show_weekly_context(target):
+    """Show where the next session sits in the user's week."""
+    print("\n--- This week ---")
+    print("Plan for {} training days: {}".format(target["sessions_per_week"], " > ".join(target["pattern"])))
+    if target["week_complete"]:
+        print("You have done all {} planned sessions this week; any extra session is light recovery.".format(
+            target["sessions_per_week"]))
+    else:
+        print("Next: session {} of {}, target intensity {}.".format(
+            target["session_number"], target["sessions_per_week"], target["intensity"]))
 
 
 def show_suggestion(suggestion, decision):
