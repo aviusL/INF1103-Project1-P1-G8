@@ -11,6 +11,7 @@ ACTIVITY_OPTIONS = (
     "running", "cycling", "swimming", "walking", "strength training", "hiit", "yoga", "rowing",
 )
 
+
 # ---------- output ----------
 def show_message(text):
     print(text)
@@ -154,25 +155,74 @@ def prompt_main_menu(has_profile, has_pending):
     print("2) Get next suggested session")
     print("3) Log a completed session" + ("  <- you have a session waiting" if has_pending else ""))
     print("4) View history")
-    print("5) Quit")
-    keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "quit"}
+    print("5) Reset all data")
+    print("6) Quit")
+    keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "reset", "6": "quit"}
     while True:
         raw = input("Choose an option: ").strip()
         if raw in keys:
             return keys[raw]
-        show_error("Please enter a number from 1 to 5.")
+        show_error("Please enter a number from 1 to 6.")
+
+
+def prompt_confirm_reset():
+    """Destructive action: only the exact word RESET confirms; anything else cancels."""
+    show_error("This permanently deletes your profile and ALL session history.")
+    return input("Type RESET to confirm, or press Enter to cancel: ").strip() == "RESET"
+
+
+def prompt_multi_choice(options, intro, allow_empty):
+    """Pick items from a numbered list. Returns the chosen names (empty list only if allow_empty)."""
+    show_message(intro)
+    for number, name in enumerate(options, start=1):
+        show_message("  {}) {}".format(number, name))
+    hint = "or press Enter for none" if allow_empty else "at least one"
+    while True:
+        raw = input("Enter numbers separated by commas (for example 1,3), {}: ".format(hint)).strip()
+        if raw == "":
+            if allow_empty:
+                return []
+            show_error("Please choose at least one.")
+            continue
+        try:
+            chosen = sorted({int(part) for part in raw.split(",")})
+        except ValueError:
+            show_error("Please enter numbers separated by commas.")
+            continue
+        if all(1 <= number <= len(options) for number in chosen):
+            return [options[number - 1] for number in chosen]
+        show_error("Each number must be between 1 and {}.".format(len(options)))
+
+
+def prompt_equipment():
+    """Equipment owned. Enter alone means bodyweight only (empty list)."""
+    return prompt_multi_choice(
+        EQUIPMENT_OPTIONS,
+        "\nWhat equipment do you have? (bodyweight exercises are always included)", True)
+
+
+def prompt_activities():
+    """Exercise types / sports the user wants to do. At least one is required."""
+    return prompt_multi_choice(
+        ACTIVITY_OPTIONS, "\nWhich exercises or sports do you want to do?", False)
 
 
 def prompt_profile():
     show_message("\nLet's set up your profile.")
-    return {
+    profile = {
         "age": prompt_int("Age", 12, 100),
+        "sex": prompt_choice("Sex", SEX_OPTIONS),
         "height_cm": prompt_float("Height in cm", 100, 250),
         "weight_kg": prompt_float("Weight in kg", 30, 250),
         "fitness_level": prompt_choice("Fitness level", FITNESS_LEVELS),
         "health_concerns": prompt_text("Prior health concerns / injuries", "none"),
         "fitness_goal": prompt_required_text("Fitness goal (e.g. run 5k in 30 min)"),
+        "days_per_week": prompt_int("Days per week you can train", 1, 7),
+        "session_duration_min": prompt_int("Minutes available per training session", 10, 120),
     }
+    profile["equipment"] = prompt_equipment()
+    profile["preferred_activities"] = prompt_activities()
+    return profile
 
 
 def prompt_accept_or_reject():
