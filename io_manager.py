@@ -65,6 +65,11 @@ def show_history(records):
         print(format_session_record(record))
 
 
+# -----------------INPUTS---------------------------------
+
+
+
+
 def prompt_yes_no(label):
     while True:
         raw = input(label + " (y/n): ").strip().lower()
@@ -89,8 +94,6 @@ def prompt_float(label, low, high, allow_blank=False):
             return value
         show_error("Value must be between {} and {}.".format(low, high))
 
-
-# ----------- Input functions --------------------
 
 def prompt_text(label, default=None):
     suffix = " [{}]".format(default) if default is not None else ""
