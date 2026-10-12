@@ -1,4 +1,6 @@
 """data_manager.py - Data layer: flat-file (JSON) persistence. No console output, no AI calls."""
+import datetime
+import glob
 import json
 import logging
 import os
@@ -12,12 +14,16 @@ LOG_FILE = os.environ.get("FITNESS_LOG_FILE", "data/app.log")
 
 def setup_logging():
     """Send log output to a file so nothing is printed outside io_manager."""
-    os.makedirs(os.path.dirname(LOG_FILE) or ".", exist_ok=True)
-    logging.basicConfig(
-        filename=LOG_FILE,
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE) or ".", exist_ok=True)
+        logging.basicConfig(
+            filename=LOG_FILE,
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+    except OSError:
+        # A log file is nice to have, never worth crashing for: run without logging.
+        logging.disable(logging.CRITICAL)
 
 
 def empty_store():
@@ -104,11 +110,49 @@ def complete_pending_session(store, actual, path=None):
     return save_data(store, path)
 
 
+def reset_data(store, path=None):
+    """Delete the data file (plus temp and .corrupt backups) and empty the in-memory store.
+    The store is emptied in place so every reference to it stays valid.
+    Returns True only if every file was removed; on failure the store is left unchanged."""
+    path = path or DATA_FILE
+    targets = [path, path + ".tmp"] + glob.glob(glob.escape(path) + ".corrupt-*")
+    all_removed = True
+    for target in targets:
+        try:
+            os.remove(target)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.error("Could not delete %s: %s", target, exc)
+            all_removed = False
+    if all_removed:
+        store.clear()
+        store.update(empty_store())
+        logger.info("All data reset by the user")
+    return all_removed
+
+
 def get_recent_sessions(store, count):
     """The last `count` sessions - this is what is sent to the AI as history."""
     if count <= 0:
         return []
     return store["sessions"][-count:]
+
+
+def sessions_this_week(store, today=None):
+    """How many sessions were logged in the current calendar week (Monday to Sunday).
+    `today` is only passed in by tests; records with an unreadable date are skipped."""
+    today = today or datetime.date.today()
+    this_week = tuple(today.isocalendar())[:2]
+    count = 0
+    for record in store["sessions"]:
+        try:
+            logged = datetime.date.fromisoformat(record["date"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if tuple(logged.isocalendar())[:2] == this_week:
+            count += 1
+    return count
 
 
 def filter_sessions(store, min_rpe=None, pain_only=False):
