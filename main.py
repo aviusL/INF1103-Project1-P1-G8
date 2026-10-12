@@ -42,6 +42,16 @@ def run_setup(store):
             "A profile already exists. Replace it (history is kept)?"):
         return False
     profile = io_manager.prompt_profile()
+    while not logic_manager.usable_activities(profile):
+        io_manager.show_error("None of your chosen activities can be done with your equipment. "
+                              "Add the needed equipment or pick other activities.")
+        profile["equipment"] = io_manager.prompt_equipment()
+        profile["preferred_activities"] = io_manager.prompt_activities()
+    for activity in profile["preferred_activities"]:
+        needed = logic_manager.missing_equipment_for(activity, profile)
+        if needed:
+            io_manager.show_message("Note: {} needs {}; it will be skipped until you add it.".format(
+                activity, " or ".join(needed)))
     if not data_manager.save_profile(store, profile):
         io_manager.show_error("Could not save your profile to disk.")
     return True
@@ -53,9 +63,11 @@ def run_suggestion_flow(store):
         io_manager.show_message(io_manager.format_suggestion(store["pending_session"]))
         if not io_manager.prompt_yes_no("Replace it with a new suggestion?"):
             return
+    weekly_target = current_weekly_target(store)
+    io_manager.show_weekly_context(weekly_target)
     user_feedback = None
     for _ in range(MAX_USER_REJECTIONS):
-        suggestion, decision = generate_valid_session(store, user_feedback)
+        suggestion, decision = generate_valid_session(store, user_feedback, weekly_target)
         if suggestion is None:
             return
         io_manager.show_suggestion(suggestion, decision)
@@ -93,6 +105,16 @@ def run_history(store):
     io_manager.show_history(records)
 
 
+def run_reset(store):
+    if not io_manager.prompt_confirm_reset():
+        io_manager.show_message("Reset cancelled. Your data is unchanged.")
+        return
+    if data_manager.reset_data(store):
+        io_manager.show_message("All data deleted. Run initial setup (option 1) to start again.")
+    else:
+        io_manager.show_error("Could not delete all data files. Check file permissions.")
+
+
 def main():
     data_manager.setup_logging()
     io_manager.show_banner()
@@ -107,6 +129,8 @@ def main():
             if choice == "setup":
                 if run_setup(store):
                     run_suggestion_flow(store)
+            elif choice == "reset":
+                run_reset(store)
             elif store["profile"] is None:
                 io_manager.show_error("Please run initial setup first (option 1).")
             elif choice == "suggest":
