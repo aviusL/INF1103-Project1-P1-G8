@@ -16,10 +16,12 @@ RISK_VALUES = ("low", "medium", "high")
 # field name -> allowed python types
 RESPONSE_SCHEMA = {
     "exercise_type": (str,),
+    "activity": (str,),
     "duration_min": (int, float),
     "intensity": (str,),
     "target_hr_bpm": (int, float),
     "target_pace_min_per_km": (int, float, type(None)),
+    "equipment_used": (list,),
     "warmup": (str,),
     "main_set": (str,),
     "cooldown": (str,),
@@ -28,21 +30,37 @@ RESPONSE_SCHEMA = {
 }
 
 SYSTEM_PROMPT = """You are an exercise-planning assistant inside a fitness coaching app.
-You receive a JSON payload with the user's profile, their recent session history
-(planned vs actual: pace, heart rate, RPE, pain/discomfort, comments), and optionally
+You receive a JSON payload with the user's profile (including sex, equipment, days_per_week
+and session_duration_min), their recent session history (planned vs actual: pace, heart rate,
+RPE, pain/discomfort, comments), the weekly_plan_target for this session, and optionally
 a reason the user rejected a previous suggestion and/or safety-rule violations to fix.
 
 Design the user's NEXT single exercise session. Adapt to how recent sessions actually went:
 progress gradually when sessions felt easy, ease off after high RPE, pain or discomfort,
 and respect any health concerns and the user's goal.
 
+Hard requirements for this session:
+- intensity must not be above weekly_plan_target.intensity (it is this session's place in the
+  user's week; the user trains days_per_week days, with easier days between harder ones).
+- duration_min must not exceed profile.session_duration_min; use most of that time when sensible.
+- Use ONLY equipment listed in profile.equipment, plus bodyweight exercises. An empty list means
+  bodyweight only. Put the exact equipment names you use in equipment_used (use
+  ["bodyweight"] if none).
+- activity must be exactly one of profile.preferred_activities (if that list is missing, choose
+  any suitable activity). Rotate through the user's activities across the week rather than
+  repeating the same one every session, unless they chose only one. exercise_type describes
+  the specific workout, for example "tempo run" or "interval swim".
+- Set target_pace_min_per_km only for running or walking; use null for every other activity.
+
 Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
 {
-  "exercise_type": "string, e.g. easy run, intervals, cycling, strength",
+  "exercise_type": "string, e.g. easy run, interval swim, hill ride, strength circuit",
+  "activity": "string, exactly one of profile.preferred_activities",
   "duration_min": number,
   "intensity": "low" | "moderate" | "high",
   "target_hr_bpm": number,
   "target_pace_min_per_km": number or null,
+  "equipment_used": ["string", ...],
   "warmup": "string",
   "main_set": "string",
   "cooldown": "string",
@@ -51,9 +69,10 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
 }"""
 
 
-def build_user_prompt(profile, history, user_feedback=None, rule_feedback=None):
+def build_user_prompt(profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
     payload = {
         "profile": profile,
+        "weekly_plan_target": weekly_target,
         "recent_sessions": history,
         "user_rejection_reason": user_feedback,
         "safety_rule_violations_to_fix": rule_feedback,
