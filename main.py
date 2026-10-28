@@ -4,6 +4,9 @@ import data_manager
 import io_manager
 import logic_manager
 
+# Get the OUTPUT class from io_manager module
+io___manager_output = io_manager.OUTPUT()
+
 HISTORY_WINDOW = 5        # how many past sessions are sent to the AI
 MAX_AI_ATTEMPTS = 3       # AI re-tries after the logic layer rejects its output
 MAX_USER_REJECTIONS = 3
@@ -26,14 +29,14 @@ def generate_valid_session(store, user_feedback=None, weekly_target=None):
     for _ in range(MAX_AI_ATTEMPTS):
         result = ai_manager.request_session(profile, history, user_feedback, rule_feedback, weekly_target)
         if not result["ok"]:
-            io_manager.show_error("Coach unavailable: {}. Please try again later.".format(result["error"]))
+            io___manager_output.show_error("Coach unavailable: {}. Please try again later.".format(result["error"]))
             return None, None
         decision = logic_manager.evaluate_session(result["data"], profile, history, weekly_target)
         if decision["outcome"] != "reject":
             return result["data"], decision
         rule_feedback = decision["reasons"]
-        io_manager.show_message("The first draft broke safety rules; asking the coach to revise...")
-    io_manager.show_error("The coach could not produce a safe session. Please try again.")
+        io___manager_output.show_message("The first draft broke safety rules; asking the coach to revise...")
+    io___manager_output.show_error("The coach could not produce a safe session. Please try again.")
     return None, None
 
 
@@ -43,46 +46,46 @@ def run_setup(store):
         return False
     profile = io_manager.prompt_profile()
     while not logic_manager.usable_activities(profile):
-        io_manager.show_error("None of your chosen activities can be done with your equipment. "
+        io___manager_output.show_error("None of your chosen activities can be done with your equipment. "
                               "Add the needed equipment or pick other activities.")
         profile["equipment"] = io_manager.prompt_equipment()
         profile["preferred_activities"] = io_manager.prompt_activities()
     for activity in profile["preferred_activities"]:
         needed = logic_manager.missing_equipment_for(activity, profile)
         if needed:
-            io_manager.show_message("Note: {} needs {}; it will be skipped until you add it.".format(
+            io___manager_output.show_message("Note: {} needs {}; it will be skipped until you add it.".format(
                 activity, " or ".join(needed)))
     if not data_manager.save_profile(store, profile):
-        io_manager.show_error("Could not save your profile to disk.")
+        io___manager_output.show_error("Could not save your profile to disk.")
     return True
 
 
 def run_suggestion_flow(store):
     if store["pending_session"]:
-        io_manager.show_message("You already have a planned session:")
-        io_manager.show_message(io_manager.format_suggestion(store["pending_session"]))
+        io___manager_output.show_message("You already have a planned session:")
+        io___manager_output.show_message(io___manager_output.format_suggestion(store["pending_session"]))
         if not io_manager.prompt_yes_no("Replace it with a new suggestion?"):
             return
     weekly_target = current_weekly_target(store)
-    io_manager.show_weekly_context(weekly_target)
+    io___manager_output.show_weekly_context(weekly_target)
     user_feedback = None
     for _ in range(MAX_USER_REJECTIONS):
         suggestion, decision = generate_valid_session(store, user_feedback, weekly_target)
         if suggestion is None:
             return
-        io_manager.show_suggestion(suggestion, decision)
+        io___manager_output.show_suggestion(suggestion, decision)
         accepted, user_feedback = io_manager.prompt_accept_or_reject()
         if accepted:
             if not data_manager.set_pending_session(store, suggestion):
-                io_manager.show_error("Could not save the session to disk.")
-            io_manager.show_message("Great - go do it, then log how it went (option 3).")
+                io___manager_output.show_error("Could not save the session to disk.")
+            io___manager_output.show_message("Great - go do it, then log how it went (option 3).")
             return
-    io_manager.show_message("Let's pick this up later - try option 2 again.")
+    io___manager_output.show_message("Let's pick this up later - try option 2 again.")
 
 
 def run_log_session(store):
     if not store["pending_session"]:
-        io_manager.show_error("There is no planned session to log. Get a suggestion first (option 2).")
+        io___manager_output.show_error("There is no planned session to log. Get a suggestion first (option 2).")
         return
     while True:
         log = io_manager.prompt_session_log()
@@ -90,36 +93,36 @@ def run_log_session(store):
         if not errors:
             break
         for error in errors:
-            io_manager.show_error(error)
-        io_manager.show_message("Please re-enter your session details.")
+            io___manager_output.show_error(error)
+        io___manager_output.show_message("Please re-enter your session details.")
     if not data_manager.complete_pending_session(store, log):
-        io_manager.show_error("Could not save the session to disk.")
+        io___manager_output.show_error("Could not save the session to disk.")
         return
-    io_manager.show_message("Session saved. Planning your next one...")
+    io___manager_output.show_message("Session saved. Planning your next one...")
     run_suggestion_flow(store)
 
 
 def run_history(store):
     pain_only = io_manager.prompt_yes_no("Show only sessions with pain reported?")
     records = data_manager.filter_sessions(store, pain_only=pain_only)
-    io_manager.show_history(records)
+    io___manager_output.show_history(records)
 
 
 def run_reset(store):
     if not io_manager.prompt_confirm_reset():
-        io_manager.show_message("Reset cancelled. Your data is unchanged.")
+        io___manager_output.show_message("Reset cancelled. Your data is unchanged.")
         return
     if data_manager.reset_data(store):
-        io_manager.show_message("All data deleted. Run initial setup (option 1) to start again.")
+        io___manager_output.show_message("All data deleted. Run initial setup (option 1) to start again.")
     else:
-        io_manager.show_error("Could not delete all data files. Check file permissions.")
+        io___manager_output.show_error("Could not delete all data files. Check file permissions.")
 
 
 def main():
     data_manager.setup_logging()
-    io_manager.show_banner()
+    io___manager_output.show_banner()
     store, status = data_manager.load_data()
-    io_manager.show_load_status(status)
+    io___manager_output.show_load_status(status)
     try:
         while True:
             choice = io_manager.prompt_main_menu(
@@ -132,7 +135,7 @@ def main():
             elif choice == "reset":
                 run_reset(store)
             elif store["profile"] is None:
-                io_manager.show_error("Please run initial setup first (option 1).")
+                io___manager_output.show_error("Please run initial setup first (option 1).")
             elif choice == "suggest":
                 run_suggestion_flow(store)
             elif choice == "log":
@@ -140,8 +143,8 @@ def main():
             elif choice == "history":
                 run_history(store)
     except (KeyboardInterrupt, EOFError):
-        io_manager.show_message("")
-    io_manager.show_message("Goodbye - keep moving!")
+        io___manager_output.show_message("")
+    io___manager_output.show_message("Goodbye - keep moving!")
 
 
 if __name__ == "__main__":
