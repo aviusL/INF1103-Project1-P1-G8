@@ -12,8 +12,8 @@ ACTIVITY_OPTIONS = (
  
  
 import os
+from pydoc import text
 import sys
-import textwrap
 import textwrap
  
 LINE_WIDTH = 56
@@ -45,96 +45,12 @@ def field(label, value):
  
  
 # ---------- output ----------
-def show_message(text):
-    print(text)
- 
- 
-def show_error(text):
-    print("[!] " + text)
- 
- 
-def show_banner():
-    print(HEAVY_RULE)
-    print("  " + bold("AI Fitness Coach"))
-    print(HEAVY_RULE)
- 
- 
-def show_load_status(status):
-    if status == "ok":
-        show_message("Loaded your saved profile and session history.")
-    elif status == "corrupt":
-        show_error("Your data file was corrupt. It was backed up and a fresh one started.")
-    else:
-        show_message("No saved data found - please run initial setup.")
- 
- 
+
 def labelled(label, text):
     """'Label:  text' with a bold label; long text wraps under the text column, not under the label."""
     indent = " " * 11
     body = textwrap.fill(str(text), width=LINE_WIDTH, initial_indent=indent, subsequent_indent=indent)
     return bold((label + ":").ljust(11)) + body[len(indent):]
- 
- 
-def format_suggestion(s):
-    pace = "n/a" if s["target_pace_min_per_km"] is None else "{} min/km".format(s["target_pace_min_per_km"])
-    rows = [
-        labelled("Activity", s.get("activity", "n/a")),
-        labelled("Type", s["exercise_type"]),
-        labelled("Duration", "{} min   Intensity: {}   Risk: {}".format(
-            s["duration_min"], s["intensity"], s["risk_level"])),
-        labelled("Target", "{} bpm, pace {}".format(s["target_hr_bpm"], pace)),
-        labelled("Equipment", ", ".join(s.get("equipment_used") or ["bodyweight"])),
-        labelled("Warm-up", s["warmup"]),
-        labelled("Main set", s["main_set"]),
-        labelled("Cool-down", s["cooldown"]),
-        labelled("Why", s["rationale"]),
-    ]
-    return "\n".join([section_title("Suggested session"), "\n\n".join(rows), LIGHT_RULE])
- 
- 
-def show_weekly_context(target):
-    """Show where the next session sits in the user's week."""
-    print(section_title("This week"))
-    print("Plan for {} training days: {}".format(target["sessions_per_week"], " > ".join(target["pattern"])))
-    if target["week_complete"]:
-        print("You have done all {} planned sessions this week; any extra session is light recovery.".format(
-            target["sessions_per_week"]))
-    else:
-        print("Next: session {} of {}, target intensity {}.".format(
-            target["session_number"], target["sessions_per_week"], target["intensity"]))
- 
- 
-def show_suggestion(suggestion, decision):
-    print(format_suggestion(suggestion))
-    if decision["outcome"] == "flag":
-        print("Warnings (score {}/100):".format(decision["score"]))
-        for reason in decision["reasons"]:
-            print("  ! " + reason)
-        print(LIGHT_RULE)
- 
- 
-def format_session_record(record):
-    actual = record["actual"]
-    pace = "n/a" if actual.get("avg_pace_min_per_km") is None else "{} min/km".format(actual["avg_pace_min_per_km"])
-    pain = "pain reported" if actual.get("pain_reported") else "no pain"
-    return "\n".join([
-        "#{}  {}  {}".format(record["id"], record["date"], record["planned"]["exercise_type"]),
-        "    {} min | {} | {} bpm | RPE {} | {}".format(
-            actual["duration_min"], pace, actual["avg_hr_bpm"], actual["rpe"], pain),
-        "    Comments: {}".format(actual.get("comments") or "-"),
-    ])
- 
- 
-def show_history(records):
-    print(section_title("Session history"))
-    if not records:
-        print("No matching sessions yet.")
-        return
-    for index, record in enumerate(records):
-        if index:
-            print()
-        print(format_session_record(record))
-    print(LIGHT_RULE)
  
  
 # ---------- validated input ----------
@@ -149,7 +65,7 @@ def prompt_required_text(label):
         value = input(label + ": ").strip()
         if value:
             return value
-        show_error("This field cannot be empty.")
+        output.show_error("This field cannot be empty.")
  
  
 def prompt_int(label, low, high):
@@ -158,11 +74,11 @@ def prompt_int(label, low, high):
         try:
             value = int(raw)
         except ValueError:
-            show_error("Please enter a whole number.")
+            output.show_error("Please enter a whole number.")
             continue
         if low <= value <= high:
             return value
-        show_error("Value must be between {} and {}.".format(low, high))
+        output.show_error("Value must be between {} and {}.".format(low, high))
  
  
 def prompt_float(label, low, high, allow_blank=False):
@@ -173,11 +89,11 @@ def prompt_float(label, low, high, allow_blank=False):
         try:
             value = float(raw)
         except ValueError:
-            show_error("Please enter a number.")
+            output.show_error("Please enter a number.")
             continue
         if low <= value <= high:
             return value
-        show_error("Value must be between {} and {}.".format(low, high))
+        output.show_error("Value must be between {} and {}.".format(low, high))
  
  
 def prompt_choice(label, options):
@@ -185,7 +101,7 @@ def prompt_choice(label, options):
         raw = input("{} ({}): ".format(label, "/".join(options))).strip().lower()
         if raw in options:
             return raw
-        show_error("Please choose one of: " + ", ".join(options))
+        output.show_error("Please choose one of: " + ", ".join(options))
  
  
 def prompt_yes_no(label):
@@ -195,7 +111,7 @@ def prompt_yes_no(label):
             return True
         if raw in ("n", "no"):
             return False
-        show_error("Please answer y or n.")
+        output.show_error("Please answer y or n.")
  
  
 def prompt_main_menu(has_profile, has_pending):
@@ -212,36 +128,36 @@ def prompt_main_menu(has_profile, has_pending):
         raw = input("Choose an option: ").strip()
         if raw in keys:
             return keys[raw]
-        show_error("Please enter a number from 1 to 6.")
+        output.show_error("Please enter a number from 1 to 6.")
  
  
 def prompt_confirm_reset():
     """Destructive action: only the exact word RESET confirms; anything else cancels."""
-    show_error("This permanently deletes your profile and ALL session history.")
+    output.show_error("This permanently deletes your profile and ALL session history.")
     return input("Type RESET to confirm, or press Enter to cancel: ").strip() == "RESET"
  
  
 def prompt_multi_choice(options, intro, allow_empty):
     """Pick items from a numbered list. Returns the chosen names (empty list only if allow_empty)."""
-    show_message(intro)
+    output.show_message(intro)
     for number, name in enumerate(options, start=1):
-        show_message("  {}) {}".format(number, name))
+        output.show_message("  {}) {}".format(number, name))
     hint = "or press Enter for none" if allow_empty else "at least one"
     while True:
         raw = input("Enter numbers separated by commas (for example 1,3), {}: ".format(hint)).strip()
         if raw == "":
             if allow_empty:
                 return []
-            show_error("Please choose at least one.")
+            output.show_error("Please choose at least one.")
             continue
         try:
             chosen = sorted({int(part) for part in raw.split(",")})
         except ValueError:
-            show_error("Please enter numbers separated by commas.")
+            output.show_error("Please enter numbers separated by commas.")
             continue
         if all(1 <= number <= len(options) for number in chosen):
             return [options[number - 1] for number in chosen]
-        show_error("Each number must be between 1 and {}.".format(len(options)))
+        output.show_error("Each number must be between 1 and {}.".format(len(options)))
  
  
 def prompt_equipment():
@@ -258,7 +174,7 @@ def prompt_activities():
  
  
 def prompt_profile():
-    show_message(section_title("Profile setup"))
+    output.show_message(section_title("Profile setup"))
     profile = {
         "age": prompt_int("Age", 12, 100),
         "sex": prompt_choice("Sex", SEX_OPTIONS),
@@ -283,7 +199,7 @@ def prompt_accept_or_reject():
  
  
 def prompt_session_log():
-    show_message(section_title("Log your session"))
+    output.show_message(section_title("Log your session"))
     return {
         "duration_min": prompt_int("Actual duration in minutes", 1, 300),
         "avg_pace_min_per_km": prompt_float("Average pace in min/km", 2, 30, allow_blank=True),
@@ -292,4 +208,92 @@ def prompt_session_log():
         "pain_reported": prompt_yes_no("Any pain or discomfort?"),
         "comments": prompt_text("Comments (pain, discomfort, how it felt)", ""),
     }
+
+class OUTPUT:
+    """ Used to display output """
+
+    def __init__(self):
+        pass
+
+    def show_message(self, text):
+        print(text)
  
+    def show_error(self, text):
+        print("[!] " + text)
+
+    def show_banner(self):
+        print(HEAVY_RULE)
+        print("  " + bold("AI Fitness Coach"))
+        print(HEAVY_RULE)
+
+
+    def show_load_status(self,status):
+        if status == "ok":
+            self.show_message("Loaded your saved profile and session history.")
+        elif status == "corrupt":
+            self.show_error("Your data file was corrupt. It was backed up and a fresh one started.")
+        else:
+            self.show_message("No saved data found - please run initial setup.")
+
+    def format_suggestion(self,s):
+        pace = "n/a" if s["target_pace_min_per_km"] is None else "{} min/km".format(s["target_pace_min_per_km"])
+        rows = [
+            labelled("Activity", s.get("activity", "n/a")),
+            labelled("Type", s["exercise_type"]),
+            labelled("Duration", "{} min   Intensity: {}   Risk: {}".format(
+                s["duration_min"], s["intensity"], s["risk_level"])),
+            labelled("Target", "{} bpm, pace {}".format(s["target_hr_bpm"], pace)),
+            labelled("Equipment", ", ".join(s.get("equipment_used") or ["bodyweight"])),
+            labelled("Warm-up", s["warmup"]),
+            labelled("Main set", s["main_set"]),
+            labelled("Cool-down", s["cooldown"]),
+            labelled("Why", s["rationale"]),
+        ]
+        return "\n".join([section_title("Suggested session"), "\n\n".join(rows), LIGHT_RULE])
+
+
+    def show_weekly_context(self,target):
+        """Show where the next session sits in the user's week."""
+        print(section_title("This week"))
+        print("Plan for {} training days: {}".format(target["sessions_per_week"], " > ".join(target["pattern"])))
+        if target["week_complete"]:
+            print("You have done all {} planned sessions this week; any extra session is light recovery.".format(
+                target["sessions_per_week"]))
+        else:
+            print("Next: session {} of {}, target intensity {}.".format(
+                target["session_number"], target["sessions_per_week"], target["intensity"]))
+
+
+    def show_suggestion(self, suggestion, decision):
+        print(self.format_suggestion(suggestion))
+        if decision["outcome"] == "flag":
+            print("Warnings (score {}/100):".format(decision["score"]))
+            for reason in decision["reasons"]:
+                print("  ! " + reason)
+            print(LIGHT_RULE)
+
+
+    def format_session_record(self, record):
+        actual = record["actual"]
+        pace = "n/a" if actual.get("avg_pace_min_per_km") is None else "{} min/km".format(actual["avg_pace_min_per_km"])
+        pain = "pain reported" if actual.get("pain_reported") else "no pain"
+        return "\n".join([
+            "#{}  {}  {}".format(record["id"], record["date"], record["planned"]["exercise_type"]),
+            "    {} min | {} | {} bpm | RPE {} | {}".format(
+                actual["duration_min"], pace, actual["avg_hr_bpm"], actual["rpe"], pain),
+            "    Comments: {}".format(actual.get("comments") or "-"),
+        ])
+
+
+    def show_history(self, records):
+        print(section_title("Session history"))
+        if not records:
+            print("No matching sessions yet.")
+            return
+        for index, record in enumerate(records):
+            if index:
+                print()
+            print(self.format_session_record(record))
+        print(LIGHT_RULE)
+
+output = OUTPUT()
