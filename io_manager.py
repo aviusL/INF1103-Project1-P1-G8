@@ -15,42 +15,46 @@ import os
 from pydoc import text
 import sys
 import textwrap
- 
-LINE_WIDTH = 56
-HEAVY_RULE = "=" * LINE_WIDTH
-LIGHT_RULE = "-" * LINE_WIDTH
- 
- 
-def bold(text):
-    """Bold text on a real terminal; plain text when piped or when NO_COLOR is set."""
-    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
-        return text
-    if os.name == "nt":
-        os.system("")  # switches on ANSI escape codes in the Windows console
-    return "\033[1m" + text + "\033[0m"
- 
- 
-def section_title(title):
-    """A light rule with a bold title, used to separate blocks of output."""
-    return "\n{}\n {}\n{}".format(LIGHT_RULE, bold(title.upper()), LIGHT_RULE)
- 
- 
-def field(label, value):
-    """A bold 'Label:' followed by the value, wrapped so long text lines up under itself."""
-    pad = 11
-    head = (label + ":").ljust(pad)
-    body = textwrap.fill(str(value), width=LINE_WIDTH, initial_indent=" " * pad,
-                         subsequent_indent=" " * pad)
-    return bold(head) + body[pad:]
- 
- 
-# ---------- output ----------
 
-def labelled(label, text):
-    """'Label:  text' with a bold label; long text wraps under the text column, not under the label."""
-    indent = " " * 11
-    body = textwrap.fill(str(text), width=LINE_WIDTH, initial_indent=indent, subsequent_indent=indent)
-    return bold((label + ":").ljust(11)) + body[len(indent):]
+
+class ConsoleFormatter:
+
+    LINE_WIDTH = 56
+    HEAVY_RULE = "=" * LINE_WIDTH
+    LIGHT_RULE = "-" * LINE_WIDTH
+    
+
+    @staticmethod
+    def bold(text):
+        """Bold text on a real terminal; plain text when piped or when NO_COLOR is set."""
+        if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+            return text
+        if os.name == "nt":
+            os.system("")  # switches on ANSI escape codes in the Windows console
+        return "\033[1m" + text + "\033[0m"
+    
+    @classmethod
+    def section_title(cls,title):
+        """A light rule with a bold title, used to separate blocks of output."""
+        return "\n{}\n {}\n{}".format(cls.LIGHT_RULE, cls.bold(title.upper()), cls.LIGHT_RULE)
+    
+    @classmethod
+    def field(cls,label, value):
+        """A bold 'Label:' followed by the value, wrapped so long text lines up under itself."""
+        pad = 11
+        head = (label + ":").ljust(pad)
+        body = textwrap.fill(str(value), width=cls.LINE_WIDTH, initial_indent=" " * pad,
+                            subsequent_indent=" " * pad)
+        return cls.bold(head) + body[pad:]
+ 
+    # ---------- output ----------
+    @classmethod
+    def labelled(cls,label, text):
+        """'Label:  text' with a bold label; long text wraps under the text column, not under the label."""
+        indent = " " * 11
+        body = textwrap.fill(str(text), width=cls.LINE_WIDTH, initial_indent=indent, subsequent_indent=indent)
+        return cls.bold((label + ":").ljust(11)) + body[len(indent):]
+
  
  
 # ---------- validated input ----------
