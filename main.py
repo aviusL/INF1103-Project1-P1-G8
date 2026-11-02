@@ -5,7 +5,8 @@ import io_manager
 import logic_manager
 
 # Get the OUTPUT class from io_manager module
-io___manager_output = io_manager.OUTPUT()
+io___manager_output = io_manager.OutputManager()
+io___manager_input = io_manager.InputManager(io___manager_output)
 
 HISTORY_WINDOW = 5        # how many past sessions are sent to the AI
 MAX_AI_ATTEMPTS = 3       # AI re-tries after the logic layer rejects its output
@@ -41,15 +42,15 @@ def generate_valid_session(store, user_feedback=None, weekly_target=None):
 
 
 def run_setup(store):
-    if store["profile"] and not io_manager.prompt_yes_no(
+    if store["profile"] and not io___manager_input.prompt_yes_no(
             "A profile already exists. Replace it (history is kept)?"):
         return False
-    profile = io_manager.prompt_profile()
+    profile = io___manager_input.prompt_profile()
     while not logic_manager.usable_activities(profile):
         io___manager_output.show_error("None of your chosen activities can be done with your equipment. "
                               "Add the needed equipment or pick other activities.")
-        profile["equipment"] = io_manager.prompt_equipment()
-        profile["preferred_activities"] = io_manager.prompt_activities()
+        profile["equipment"] = io___manager_input.prompt_equipment()
+        profile["preferred_activities"] = io___manager_input.prompt_activities()
     for activity in profile["preferred_activities"]:
         needed = logic_manager.missing_equipment_for(activity, profile)
         if needed:
@@ -64,7 +65,7 @@ def run_suggestion_flow(store):
     if store["pending_session"]:
         io___manager_output.show_message("You already have a planned session:")
         io___manager_output.show_message(io___manager_output.format_suggestion(store["pending_session"]))
-        if not io_manager.prompt_yes_no("Replace it with a new suggestion?"):
+        if not io___manager_input.prompt_yes_no("Replace it with a new suggestion?"):
             return
     weekly_target = current_weekly_target(store)
     io___manager_output.show_weekly_context(weekly_target)
@@ -74,7 +75,7 @@ def run_suggestion_flow(store):
         if suggestion is None:
             return
         io___manager_output.show_suggestion(suggestion, decision)
-        accepted, user_feedback = io_manager.prompt_accept_or_reject()
+        accepted, user_feedback = io___manager_input.prompt_accept_or_reject()
         if accepted:
             if not data_manager.set_pending_session(store, suggestion):
                 io___manager_output.show_error("Could not save the session to disk.")
@@ -88,7 +89,7 @@ def run_log_session(store):
         io___manager_output.show_error("There is no planned session to log. Get a suggestion first (option 2).")
         return
     while True:
-        log = io_manager.prompt_session_log()
+        log = io___manager_input.prompt_session_log()
         errors = logic_manager.validate_session_log(log, store["profile"])
         if not errors:
             break
@@ -103,13 +104,13 @@ def run_log_session(store):
 
 
 def run_history(store):
-    pain_only = io_manager.prompt_yes_no("Show only sessions with pain reported?")
+    pain_only = io___manager_input.prompt_yes_no("Show only sessions with pain reported?")
     records = data_manager.filter_sessions(store, pain_only=pain_only)
     io___manager_output.show_history(records)
 
 
 def run_reset(store):
-    if not io_manager.prompt_confirm_reset():
+    if not io___manager_input.prompt_confirm_reset():
         io___manager_output.show_message("Reset cancelled. Your data is unchanged.")
         return
     if data_manager.reset_data(store):
@@ -125,7 +126,7 @@ def main():
     io___manager_output.show_load_status(status)
     try:
         while True:
-            choice = io_manager.prompt_main_menu(
+            choice = io___manager_input.prompt_main_menu(
                 store["profile"] is not None, store["pending_session"] is not None)
             if choice == "quit":
                 break
