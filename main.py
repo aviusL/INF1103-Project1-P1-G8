@@ -8,6 +8,13 @@ import logic_manager
 io___manager_output = io_manager.OutputManager()
 io___manager_input = io_manager.InputManager(io___manager_output)
 
+# GUI related stuff for kivy
+def use_io(output, input_manager):
+    global io___manager_output, io___manager_input
+    io___manager_output = output
+    io___manager_input = input_manager
+
+
 HISTORY_WINDOW = 5        # how many past sessions are sent to the AI
 MAX_AI_ATTEMPTS = 3       # AI re-tries after the logic layer rejects its output
 MAX_USER_REJECTIONS = 3
