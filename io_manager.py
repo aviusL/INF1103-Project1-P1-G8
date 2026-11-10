@@ -63,15 +63,20 @@ class InputManager:
         self.out_put = out_put
 
 
+    def _read(self, prompt):
+        """The only place user input is used."""
+        return input(prompt)
+
+
     def prompt_text(self,label, default=None):
         suffix = " [{}]".format(default) if default is not None else ""
-        value = input("{}{}: ".format(label, suffix)).strip()
+        value = self._read("{}{}: ".format(label, suffix)).strip()
         return value if value else (default if default is not None else "")
     
     
     def prompt_required_text(self,label):
         while True:
-            value = input(label + ": ").strip()
+            value = (label + ": ").strip()
             if value:
                 return value
             self.out_put.show_error("This field cannot be empty.")
@@ -79,7 +84,7 @@ class InputManager:
     
     def prompt_int(self,label, low, high):
         while True:
-            raw = input("{} ({}-{}): ".format(label, low, high)).strip()
+            raw = self._read("{} ({}-{}): ".format(label, low, high)).strip()
             try:
                 value = int(raw)
             except ValueError:
@@ -92,7 +97,7 @@ class InputManager:
     
     def prompt_float(self,label, low, high, allow_blank=False):
         while True:
-            raw = input("{} ({}-{}{}): ".format(label, low, high, ", blank = n/a" if allow_blank else "")).strip()
+            raw = self._read("{} ({}-{}{}): ".format(label, low, high, ", blank = n/a" if allow_blank else "")).strip()
             if allow_blank and raw == "":
                 return None
             try:
@@ -107,7 +112,7 @@ class InputManager:
     
     def prompt_choice(self,label, options):
         while True:
-            raw = input("{} ({}): ".format(label, "/".join(options))).strip().lower()
+            raw = self._read("{} ({}): ".format(label, "/".join(options))).strip().lower()
             if raw in options:
                 return raw
             self.out_put.show_error("Please choose one of: " + ", ".join(options))
@@ -115,7 +120,7 @@ class InputManager:
     
     def prompt_yes_no(self,label):
         while True:
-            raw = input(label + " (y/n): ").strip().lower()
+            raw = self._read(label + " (y/n): ").strip().lower()
             if raw in ("y", "yes"):
                 return True
             if raw in ("n", "no"):
@@ -124,17 +129,17 @@ class InputManager:
     
     
     def prompt_main_menu(self, has_profile, has_pending):
-        print(ConsoleFormatter.section_title("Main menu"))
-        print("1) Initial setup (create/replace profile)")
-        print("2) Get next suggested session")
-        print("3) Log a completed session" + ("  <- you have a session waiting" if has_pending else ""))
-        print("4) View history")
-        print("5) Reset all data")
-        print("6) Quit")
-        print(ConsoleFormatter.LIGHT_RULE)
+        self.out_put.show_message(ConsoleFormatter.section_title("Main menu"))
+        self.out_put.show_message("1) Initial setup (create/replace profile)")
+        self.out_put.show_message("2) Get next suggested session")
+        self.out_put.show_message("3) Log a completed session" + ("  <- you have a session waiting" if has_pending else ""))
+        self.out_put.show_message("4) View history")
+        self.out_put.show_message("5) Reset all data")
+        self.out_put.show_message("6) Quit")
+        self.out_put.show_message(ConsoleFormatter.LIGHT_RULE)
         keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "reset", "6": "quit"}
         while True:
-            raw = input("Choose an option: ").strip()
+            raw = self._read("Choose an option: ").strip()
             if raw in keys:
                 return keys[raw]
             self.out_put.show_error("Please enter a number from 1 to 6.")
@@ -143,7 +148,7 @@ class InputManager:
     def prompt_confirm_reset(self):
         """Destructive action: only the exact word RESET confirms; anything else cancels."""
         self.out_put.show_error("This permanently deletes your profile and ALL session history.")
-        return input("Type RESET to confirm, or press Enter to cancel: ").strip() == "RESET"
+        return self._read("Type RESET to confirm, or press Enter to cancel: ").strip() == "RESET"
     
     
     def prompt_multi_choice(self, options, intro, allow_empty):
@@ -153,7 +158,7 @@ class InputManager:
             self.out_put.show_message("  {}) {}".format(number, name))
         hint = "or press Enter for none" if allow_empty else "at least one"
         while True:
-            raw = input("Enter numbers separated by commas (for example 1,3), {}: ".format(hint)).strip()
+            raw = self._read("Enter numbers separated by commas (for example 1,3), {}: ".format(hint)).strip()
             if raw == "":
                 if allow_empty:
                     return []
@@ -229,12 +234,12 @@ class OutputManager:
         print(text)
 
     def show_error(self, text):
-        print("[!] " + text)
+        self.show_message("[!] " + text)
 
     def show_banner(self):
-        print(ConsoleFormatter.HEAVY_RULE)
-        print("  " + ConsoleFormatter.bold("AI Fitness Coach"))
-        print(ConsoleFormatter.HEAVY_RULE)
+        self.show_message(ConsoleFormatter.HEAVY_RULE)
+        self.show_message("  " + ConsoleFormatter.bold("AI Fitness Coach"))
+        self.show_message(ConsoleFormatter.HEAVY_RULE)
 
 
     def show_load_status(self,status):
@@ -264,23 +269,23 @@ class OutputManager:
 
     def show_weekly_context(self,target):
         """Show where the next session sits in the user's week."""
-        print(ConsoleFormatter.section_title("This week"))
-        print("Plan for {} training days: {}".format(target["sessions_per_week"], " > ".join(target["pattern"])))
+        self.show_message(ConsoleFormatter.section_title("This week"))
+        self.show_message("Plan for {} training days: {}".format(target["sessions_per_week"], " > ".join(target["pattern"])))
         if target["week_complete"]:
-            print("You have done all {} planned sessions this week; any extra session is light recovery.".format(
+            self.show_message("You have done all {} planned sessions this week; any extra session is light recovery.".format(
                 target["sessions_per_week"]))
         else:
-            print("Next: session {} of {}, target intensity {}.".format(
+            self.show_message("Next: session {} of {}, target intensity {}.".format(
                 target["session_number"], target["sessions_per_week"], target["intensity"]))
 
 
     def show_suggestion(self, suggestion, decision):
-        print(self.format_suggestion(suggestion))
+        self.show_message(self.format_suggestion(suggestion))
         if decision["outcome"] == "flag":
-            print("Warnings (score {}/100):".format(decision["score"]))
+            self.show_message("Warnings (score {}/100):".format(decision["score"]))
             for reason in decision["reasons"]:
-                print("  ! " + reason)
-            print(ConsoleFormatter.LIGHT_RULE)
+                self.show_message("  ! " + reason)
+            self.show_message(ConsoleFormatter.LIGHT_RULE)
 
 
     def format_session_record(self, record):
@@ -296,15 +301,15 @@ class OutputManager:
 
 
     def show_history(self, records):
-        print(ConsoleFormatter.section_title("Session history"))
+        self.show_message(ConsoleFormatter.section_title("Session history"))
         if not records:
-            print("No matching sessions yet.")
+            self.show_message("No matching sessions yet.")
             return
         for index, record in enumerate(records):
             if index:
-                print()
-            print(self.format_session_record(record))
-        print(ConsoleFormatter.LIGHT_RULE)
+                self.show_message("")
+            self.show_message(self.format_session_record(record))
+        self.show_message(ConsoleFormatter.LIGHT_RULE)
 
 
 #Create shared INSTANCES
