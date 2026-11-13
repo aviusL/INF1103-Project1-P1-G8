@@ -26,7 +26,7 @@ def current_weekly_target(store):
     """Where the next session sits in the user's week (sessions already logged this week)."""
     history = data_manager.get_recent_sessions(store, HISTORY_WINDOW)
     done = data_manager.sessions_this_week(store)
-    return logic_manager.weekly_target(store["profile"], done, history)
+    return logic.weekly_target(store["profile"], done, history)
 
 
 def generate_valid_session(store, user_feedback=None, weekly_target=None):
