@@ -2,7 +2,9 @@
 import ai_manager
 import data_manager
 import io_manager
-import logic_manager
+from logic_manager import LogicManager
+
+logic = LogicManager()
 
 # Get the OUTPUT class from io_manager module
 io___manager_output = io_manager.OutputManager()
@@ -39,7 +41,7 @@ def generate_valid_session(store, user_feedback=None, weekly_target=None):
         if not result["ok"]:
             io___manager_output.show_error("Coach unavailable: {}. Please try again later.".format(result["error"]))
             return None, None
-        decision = logic_manager.evaluate_session(result["data"], profile, history, weekly_target)
+        decision = logic.evaluate_session(result["data"], profile, history, weekly_target)
         if decision["outcome"] != "reject":
             return result["data"], decision
         rule_feedback = decision["reasons"]
@@ -53,13 +55,13 @@ def run_setup(store):
             "A profile already exists. Replace it (history is kept)?"):
         return False
     profile = io___manager_input.prompt_profile()
-    while not logic_manager.usable_activities(profile):
+    while not logic.usable_activities(profile):
         io___manager_output.show_error("None of your chosen activities can be done with your equipment. "
                               "Add the needed equipment or pick other activities.")
         profile["equipment"] = io___manager_input.prompt_equipment()
         profile["preferred_activities"] = io___manager_input.prompt_activities()
     for activity in profile["preferred_activities"]:
-        needed = logic_manager.missing_equipment_for(activity, profile)
+        needed = logic.missing_equipment_for(activity, profile)
         if needed:
             io___manager_output.show_message("Note: {} needs {}; it will be skipped until you add it.".format(
                 activity, " or ".join(needed)))
@@ -97,7 +99,7 @@ def run_log_session(store):
         return
     while True:
         log = io___manager_input.prompt_session_log()
-        errors = logic_manager.validate_session_log(log, store["profile"])
+        errors = logic.validate_session_log(log, store["profile"])
         if not errors:
             break
         for error in errors:
