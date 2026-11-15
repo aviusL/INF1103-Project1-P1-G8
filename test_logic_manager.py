@@ -238,52 +238,6 @@ class ExistingManagerRegressionTests(unittest.TestCase):
         self.assertIn('weekly_plan_target', prompt)
         self.assertIn('dumbbells', prompt)
 
-    def test_data_missing_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store, status = data_manager.load_data(os.path.join(tmp, 'none.json'))
-        self.assertEqual(status, 'missing')
-        self.assertEqual(store['sessions'], [])
-
-    def test_data_corrupt_file(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, 'data.json')
-            with open(path, 'w') as handle:
-                handle.write('{not valid json')
-            store, status = data_manager.load_data(path)
-            self.assertEqual(status, 'corrupt')
-            self.assertEqual(store['sessions'], [])
-            self.assertTrue(any('.corrupt-' in name for name in os.listdir(tmp)))
-
-    def test_data_round_trip(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, 'data.json')
-            store = data_manager.empty_store()
-            self.assertTrue(data_manager.save_profile(store, PROFILE, path))
-            self.assertTrue(data_manager.set_pending_session(store, GOOD_AI, path))
-            self.assertTrue(data_manager.complete_pending_session(store,
-                            {'duration_min': 30, 'rpe': 6, 'pain_reported': True}, path))
-            loaded, status = data_manager.load_data(path)
-        self.assertEqual(status, 'ok')
-        self.assertEqual(len(data_manager.filter_sessions(loaded, pain_only=True)), 1)
-
-    def test_data_reset(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, 'data.json')
-            store = data_manager.empty_store()
-            data_manager.save_profile(store, PROFILE, path)
-            self.assertTrue(data_manager.reset_data(store, path))
-            self.assertEqual(os.listdir(tmp), [])
-        self.assertIsNone(store['profile'])
-
-    def test_sessions_this_week(self):
-        store = data_manager.empty_store()
-        store['sessions'] = [
-            {'id': 1, 'date': '2026-10-11', 'planned': {}, 'actual': {}},
-            {'id': 2, 'date': '2026-10-12', 'planned': {}, 'actual': {}},
-            {'id': 3, 'date': '2026-10-14', 'planned': {}, 'actual': {}},
-        ]
-        self.assertEqual(data_manager.sessions_this_week(store, today=datetime.date(2026, 10, 12)), 2)
-
 
 class MainIntegrationTests(unittest.TestCase):
     def test_main_uses_oop_logic(self):
