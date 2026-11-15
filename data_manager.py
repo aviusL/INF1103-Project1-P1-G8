@@ -48,19 +48,30 @@ class LoadStatus(str, Enum):
     OK = "ok"
     MISSING = "missing"
     CORRUPT = "corrupt"
+
 class Storage(ABC):
+    """Interface (contract) for anything that can persist the store payload.
+
+    DataManager depends only on this abstraction (Dependency Inversion / OCP):
+    a database backend can be added later without touching DataManager.
+    Every implementation must be failure-tolerant: methods never raise.
+    """
 
     @abstractmethod
     def load(self):
+        """Return (payload, LoadStatus). payload is None unless status is OK."""
 
     @abstractmethod
     def save(self, payload):
+        """Persist payload. Return True on success."""
 
     @abstractmethod
     def quarantine(self):
+        """Move unusable stored data aside so it is never silently overwritten."""
 
     @abstractmethod
     def erase(self):
+        """Delete everything this storage holds. Return True only if all of it was removed."""
 
 
 class JsonFileStorage(Storage):
@@ -227,6 +238,7 @@ class SessionFilter(ABC):
 
     @abstractmethod
     def matches(self, record):
+        pass
 class MinRpeFilter(SessionFilter):
     def __init__(self, min_rpe):
         self._min_rpe = min_rpe
