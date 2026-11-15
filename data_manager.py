@@ -180,3 +180,45 @@ class Profile(Record):
         if not isinstance(data, dict):
             raise ValueError("profile must be a dict")
         return cls(data)
+
+class SessionRecord(Record):
+
+    def __init__(self, record_id, date, planned, actual):
+        self._id = record_id
+        self._date = date
+        self._planned = copy.deepcopy(planned)
+        self._actual = copy.deepcopy(actual)
+
+    @property
+    def id(self):
+        return self._id
+
+    @property
+    def rpe(self):
+        value = self._actual.get("rpe", 0) if isinstance(self._actual, dict) else 0
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else 0
+
+    @property
+    def pain_reported(self):
+        return isinstance(self._actual, dict) and bool(self._actual.get("pain_reported", False))
+
+    @property
+    def logged_on(self):
+        try:
+            return datetime.date.fromisoformat(self._date)
+        except (TypeError, ValueError):
+            return None
+
+    def to_dict(self):
+        return {
+            "id": self._id,
+            "date": self._date,
+            "planned": copy.deepcopy(self._planned),
+            "actual": copy.deepcopy(self._actual),
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("session record must be a dict")
+        return cls(data.get("id"), data.get("date"), data.get("planned"), data.get("actual", {}))
