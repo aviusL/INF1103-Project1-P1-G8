@@ -288,8 +288,8 @@ class ExistingManagerRegressionTests(unittest.TestCase):
 class MainIntegrationTests(unittest.TestCase):
     def test_main_uses_oop_logic(self):
         import main
-        self.assertIsInstance(main._coach.logic, LogicManager)
-        target = main._coach.logic.weekly_target(PROFILE, 0, [])
+        self.assertIsInstance(main.logic, LogicManager)
+        target = main.logic.weekly_target(PROFILE, 0, [])
         self.assertEqual(target['session_number'], 1)
 
 
