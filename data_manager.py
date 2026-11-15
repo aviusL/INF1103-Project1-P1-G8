@@ -277,3 +277,110 @@ class SessionHistory:
         if not isinstance(items, list):
             raise ValueError("sessions must be a list")
         return cls(SessionRecord.from_dict(item) for item in items)
+
+class DataManager:
+  
+    def __init__(self, storage, clock=datetime.date.today):
+        self._storage = storage          # aggregation: injected, can outlive this manager
+        self._clock = clock              # injectable so tests control "today"
+        self._profile = None
+        self._pending_session = None
+        self._history = SessionHistory()  # composition: created and replaced here
+
+    @classmethod
+    def from_config(cls, config=None):
+        config = config or DataConfig.from_env()
+        return cls(JsonFileStorage(config.data_file))
+
+    # ---- read-only views (copies, so callers cannot corrupt internal state) ----
+    @property
+    def profile(self):
+        return self._profile.to_dict() if self._profile else None
+
+    @property
+    def pending_session(self):
+        return copy.deepcopy(self._pending_session)
+
+    @property
+    def sessions(self):
+        return self._history.to_list()
+
+    # ---- load / save ----
+    def load(self):
+        payload, status = self._storage.load()
+        if status is LoadStatus.OK:
+            try:
+                self._apply(payload)
+            except ValueError as exc:
+                logger.error("Stored data has an invalid structure: %s", exc)
+                self._storage.quarantine()
+                status = LoadStatus.CORRUPT
+        if status is not LoadStatus.OK:
+            self._clear_state()
+        return status
+
+    def _apply(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("top level must be a dict")
+        raw_profile = payload.get("profile")
+        pending = payload.get("pending_session")
+        if pending is not None and not isinstance(pending, dict):
+            raise ValueError("pending_session must be a dict or null")
+        profile = Profile.from_dict(raw_profile) if raw_profile is not None else None
+        history = SessionHistory.from_list(payload.get("sessions"))
+        self._profile, self._pending_session, self._history = profile, copy.deepcopy(pending), history
+
+    def _to_payload(self):
+        return {
+            "profile": self._profile.to_dict() if self._profile else None,
+            "pending_session": copy.deepcopy(self._pending_session),
+            "sessions": self._history.to_list(),
+        }
+
+    def _clear_state(self):
+        self._profile = None
+        self._pending_session = None
+        self._history = SessionHistory()
+
+    def _save(self):
+        return self._storage.save(self._to_payload())
+
+    # ---- commands ----
+    def save_profile(self, profile):
+        self._profile = Profile.from_dict(profile)
+        return self._save()
+
+    def set_pending_session(self, suggestion):
+        self._pending_session = copy.deepcopy(suggestion)
+        return self._save()
+
+    def complete_pending_session(self, actual):
+        self._history.add(self._pending_session, actual, self._clock().isoformat())
+        self._pending_session = None
+        return self._save()
+
+    def reset(self):
+        
+        if not self._storage.erase():
+            return False
+        self._clear_state()
+        logger.info("All data reset by the user")
+        return True
+
+    # ---- queries ----
+    def get_recent_sessions(self, count):
+        return [record.to_dict() for record in self._history.recent(count)]
+
+    def sessions_this_week(self, today=None):
+        return self._history.count_in_week_of(today or self._clock())
+
+    def query_sessions(self, *filters):
+        return [record.to_dict() for record in self._history.query(*filters)]
+
+    def filter_sessions(self, min_rpe=None, pain_only=False):
+        filters = []
+        if min_rpe is not None:
+            filters.append(MinRpeFilter(min_rpe))
+        if pain_only:
+            filters.append(PainReportedFilter())
+        return self.query_sessions(*filters)
