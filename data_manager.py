@@ -119,3 +119,29 @@ class JsonFileStorage(Storage):
                 logger.error("Could not delete %s: %s", target, exc)
                 all_removed = False
         return all_removed
+class InMemoryStorage(Storage):
+    """Keeps the payload in memory. Used by tests so no disk or API is needed."""
+
+    def __init__(self, payload=None, succeed=True):
+        self._payload = copy.deepcopy(payload)
+        self._succeed = succeed          # set False to simulate a failing disk
+
+    def load(self):
+        if self._payload is None:
+            return None, LoadStatus.MISSING
+        return copy.deepcopy(self._payload), LoadStatus.OK
+
+    def save(self, payload):
+        if not self._succeed:
+            return False
+        self._payload = copy.deepcopy(payload)
+        return True
+
+    def quarantine(self):
+        self._payload = None
+
+    def erase(self):
+        if not self._succeed:
+            return False
+        self._payload = None
+        return True
