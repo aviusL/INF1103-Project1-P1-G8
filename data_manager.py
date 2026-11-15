@@ -222,3 +222,10 @@ class SessionRecord(Record):
         if not isinstance(data, dict):
             raise ValueError("session record must be a dict")
         return cls(data.get("id"), data.get("date"), data.get("planned"), data.get("actual", {}))
+
+class SessionFilter(ABC):
+    """Contract for one query condition. New filters never require editing SessionHistory."""
+
+    @abstractmethod
+    def matches(self, record):
+        """True if the SessionRecord satisfies this filter."""
