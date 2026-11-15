@@ -28,7 +28,6 @@ class DataConfig:
             log_file=os.environ.get("FITNESS_LOG_FILE", cls.log_file),
         )
 class AppLogger:
-    """Sends log output to a file so nothing is printed outside io_manager."""
 
     def __init__(self, log_file):
         self._log_file = log_file
@@ -44,3 +43,8 @@ class AppLogger:
         except OSError:
             # A log file is nice to have, never worth crashing for: run without logging.
             logging.disable(logging.CRITICAL)
+class LoadStatus(str, Enum):
+
+    OK = "ok"
+    MISSING = "missing"
+    CORRUPT = "corrupt"
