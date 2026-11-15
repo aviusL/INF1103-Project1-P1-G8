@@ -166,3 +166,17 @@ class Record(ABC):
 
     def __repr__(self):
         return "{}({})".format(type(self).__name__, self.to_dict())
+
+class Profile(Record):
+
+    def __init__(self, data):
+        self._data = copy.deepcopy(data)
+
+    def to_dict(self):
+        return copy.deepcopy(self._data)
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("profile must be a dict")
+        return cls(data)
