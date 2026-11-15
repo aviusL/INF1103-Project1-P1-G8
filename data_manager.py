@@ -48,3 +48,18 @@ class LoadStatus(str, Enum):
     OK = "ok"
     MISSING = "missing"
     CORRUPT = "corrupt"
+class Storage(ABC):
+
+    @abstractmethod
+    def load(self):
+
+    @abstractmethod
+    def save(self, payload):
+
+    @abstractmethod
+    def quarantine(self):
+
+    @abstractmethod
+    def erase(self):
+
+
