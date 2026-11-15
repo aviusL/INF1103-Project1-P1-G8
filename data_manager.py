@@ -119,8 +119,8 @@ class JsonFileStorage(Storage):
                 logger.error("Could not delete %s: %s", target, exc)
                 all_removed = False
         return all_removed
+        
 class InMemoryStorage(Storage):
-    """Keeps the payload in memory. Used by tests so no disk or API is needed."""
 
     def __init__(self, payload=None, succeed=True):
         self._payload = copy.deepcopy(payload)
@@ -145,3 +145,24 @@ class InMemoryStorage(Storage):
             return False
         self._payload = None
         return True
+
+class Record(ABC):
+    """Abstract base for anything persisted. Shares equality and repr; subclasses
+    define how they turn into / are built from a plain dict."""
+
+    @abstractmethod
+    def to_dict(self):
+        """Return a plain, JSON-serialisable copy of this record."""
+
+    @classmethod
+    @abstractmethod
+    def from_dict(cls, data):
+        """Build a record from a dict. Raise ValueError if the data is unusable."""
+
+    def __eq__(self, other):
+        return type(self) is type(other) and self.to_dict() == other.to_dict()
+
+    __hash__ = None
+
+    def __repr__(self):
+        return "{}({})".format(type(self).__name__, self.to_dict())
