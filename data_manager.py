@@ -238,3 +238,42 @@ class MinRpeFilter(SessionFilter):
 class PainReportedFilter(SessionFilter):
     def matches(self, record):
         return record.pain_reported
+
+class SessionHistory:
+
+    def __init__(self, records=None):
+        self._records = list(records or [])
+
+    def __len__(self):
+        return len(self._records)
+
+    def add(self, planned, actual, date):
+        record = SessionRecord(len(self._records) + 1, date, planned, actual)
+        self._records.append(record)
+        return record
+
+    def recent(self, count):
+        if count <= 0:
+            return []
+        return self._records[-count:]
+
+    def count_in_week_of(self, today):
+        
+        this_week = tuple(today.isocalendar())[:2]
+        return sum(
+            1 for record in self._records
+            if record.logged_on is not None
+            and tuple(record.logged_on.isocalendar())[:2] == this_week
+        )
+
+    def query(self, *filters):
+        return [r for r in self._records if all(f.matches(r) for f in filters)]
+
+    def to_list(self):
+        return [record.to_dict() for record in self._records]
+
+    @classmethod
+    def from_list(cls, items):
+        if not isinstance(items, list):
+            raise ValueError("sessions must be a list")
+        return cls(SessionRecord.from_dict(item) for item in items)
