@@ -63,3 +63,59 @@ class Storage(ABC):
     def erase(self):
 
 
+class JsonFileStorage(Storage):
+
+    def __init__(self, path):
+        self._path = path
+
+    @property
+    def path(self):
+        return self._path
+
+    def load(self):
+        if not os.path.exists(self._path):
+            logger.info("No data file at %s; starting fresh", self._path)
+            return None, LoadStatus.MISSING
+        try:
+            with open(self._path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as exc:
+            logger.error("Failed to read %s: %s", self._path, exc)
+            self.quarantine()
+            return None, LoadStatus.CORRUPT
+        return payload, LoadStatus.OK
+
+    def save(self, payload):
+        tmp_path = self._path + ".tmp"
+        try:
+            os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+            os.replace(tmp_path, self._path)
+            return True
+        except (OSError, TypeError, ValueError) as exc:
+            logger.error("Failed to save %s: %s", self._path, exc)
+            return False
+
+    def quarantine(self):
+        backup = "{}.corrupt-{}".format(self._path, int(time.time()))
+        try:
+            os.replace(self._path, backup)
+            logger.error("Corrupt data file moved to %s", backup)
+        except OSError as exc:
+            logger.error("Could not back up corrupt file %s: %s", self._path, exc)
+
+    def erase(self):
+
+        targets = [self._path, self._path + ".tmp"]
+        targets += glob.glob(glob.escape(self._path) + ".corrupt-*")
+        all_removed = True
+        for target in targets:
+            try:
+                os.remove(target)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                logger.error("Could not delete %s: %s", target, exc)
+                all_removed = False
+        return all_removed
