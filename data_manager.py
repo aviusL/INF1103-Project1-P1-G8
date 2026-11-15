@@ -224,8 +224,17 @@ class SessionRecord(Record):
         return cls(data.get("id"), data.get("date"), data.get("planned"), data.get("actual", {}))
 
 class SessionFilter(ABC):
-    """Contract for one query condition. New filters never require editing SessionHistory."""
 
     @abstractmethod
     def matches(self, record):
-        """True if the SessionRecord satisfies this filter."""
+class MinRpeFilter(SessionFilter):
+    def __init__(self, min_rpe):
+        self._min_rpe = min_rpe
+
+    def matches(self, record):
+        return record.rpe >= self._min_rpe
+
+
+class PainReportedFilter(SessionFilter):
+    def matches(self, record):
+        return record.pain_reported
