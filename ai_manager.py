@@ -70,3 +70,38 @@ class AIResult:
 
     def to_dict(self):
         return {"ok": self.ok, "data": self.data, "error": self.error}
+
+
+# --------------------------------------------------------------------------- #
+# Response schema: one polymorphic FieldSpec per expected JSON field
+# --------------------------------------------------------------------------- #
+class FieldSpec(ABC):
+    #abstract description of one field in the ai JSON reply.
+
+    def __init__(self, name, types):
+        self._name = name
+        self._types = tuple(types)
+
+    @property
+    def name(self):
+        return self._name
+
+    def check_type(self, data):
+        #return an error if the field is missing or has the wrong type, else None.
+        if self._name not in data:
+            return "missing field: " + self._name
+        value = data[self._name]
+        if isinstance(value, bool) or not isinstance(value, self._types):  # True is not a number
+            return "wrong type for field: " + self._name
+        return None
+
+    @abstractmethod
+    def check_value(self, value):
+        #return an error if a correctly typed value is still not allowed, else None.
+
+
+class TypedField(FieldSpec):
+    #any value of the right type is accepted.
+
+    def check_value(self, value):
+        return None
