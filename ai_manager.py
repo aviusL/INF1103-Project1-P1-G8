@@ -1,35 +1,217 @@
-"""ai_manager.py - AI layer: talks to Claude only. No domain/business rules, no console output."""
 import json
 import logging
 import os
 import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional
+
+try:
+    import anthropic
+except ImportError:  # handled at call time so the app still starts without the SDK
+    anthropic = None
 
 logger = logging.getLogger("ai_manager")
-
-MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
-API_TIMEOUT_SECONDS = 30.0
-MAX_SCHEMA_ATTEMPTS = 2
 
 INTENSITY_VALUES = ("low", "moderate", "high")
 RISK_VALUES = ("low", "medium", "high")
 
-# field name -> allowed python types
-RESPONSE_SCHEMA = {
-    "exercise_type": (str,),
-    "activity": (str,),
-    "duration_min": (int, float),
-    "intensity": (str,),
-    "target_hr_bpm": (int, float),
-    "target_pace_min_per_km": (int, float, type(None)),
-    "equipment_used": (list,),
-    "warmup": (str,),
-    "main_set": (str,),
-    "cooldown": (str,),
-    "rationale": (str,),
-    "risk_level": (str,),
-}
 
-SYSTEM_PROMPT = """You are an exercise-planning assistant inside a fitness coaching app.
+# --------------------------------------------------------------------------- #
+# configuration and value objects
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class AIConfig:
+    #settings for the AI layer. Immutable, so one config can be shared safely
+    model: str = "claude-sonnet-5-5"
+    timeout_seconds: float = 30.0
+    max_tokens: int = 1000
+    sdk_max_retries: int = 2
+    max_schema_attempts: int = 2
+
+    @classmethod
+    def from_env(cls):
+        return cls(model=os.environ.get("CLAUDE_MODEL", cls.model))
+
+
+@dataclass(frozen=True)
+class SessionRequest:
+    #everything the AI needs to plan one session
+    profile: dict
+    history: list
+    user_feedback: Optional[str] = None
+    rule_feedback: Optional[list] = None
+    weekly_target: Optional[dict] = None
+
+    def to_payload(self):
+        return {
+            "profile": self.profile,
+            "weekly_plan_target": self.weekly_target,
+            "recent_sessions": self.history,
+            "user_rejection_reason": self.user_feedback,
+            "safety_rule_violations_to_fix": self.rule_feedback,
+        }
+
+
+@dataclass(frozen=True)
+class AIResult:
+    #outcome of one ai request. when ok is True data is set, otherwise error is.
+    ok: bool
+    data: Optional[dict] = None
+    error: Optional[str] = None
+
+    @classmethod
+    def success(cls, data):
+        return cls(ok=True, data=data)
+
+    @classmethod
+    def failure(cls, error):
+        return cls(ok=False, error=error)
+
+    def to_dict(self):
+        return {"ok": self.ok, "data": self.data, "error": self.error}
+
+
+# --------------------------------------------------------------------------- #
+# Response schema: one polymorphic FieldSpec per expected JSON field
+# --------------------------------------------------------------------------- #
+class FieldSpec(ABC):
+    #abstract description of one field in the ai JSON reply.
+
+    def __init__(self, name, types):
+        self._name = name
+        self._types = tuple(types)
+
+    @property
+    def name(self):
+        return self._name
+
+    def check_type(self, data):
+        #return an error if the field is missing or has the wrong type, else None.
+        if self._name not in data:
+            return "missing field: " + self._name
+        value = data[self._name]
+        if isinstance(value, bool) or not isinstance(value, self._types):  # True is not a number
+            return "wrong type for field: " + self._name
+        return None
+
+    @abstractmethod
+    def check_value(self, value):
+        #return an error if a correctly typed value is still not allowed, else None.
+
+
+class TypedField(FieldSpec):
+    #any value of the right type is accepted.
+
+    def check_value(self, value):
+        return None
+
+class ChoiceField(FieldSpec):
+    # string restricted to a fixed set of choices.
+
+    def __init__(self, name, choices):
+        super().__init__(name, (str,))
+        self._choices = tuple(choices)
+
+    def check_value(self, value):
+        if value not in self._choices:
+            return "{} must be one of {}".format(self._name, self._choices)
+        return None
+
+
+class StringListField(FieldSpec):
+    #list whose items must all be strings
+
+    def __init__(self, name):
+        super().__init__(name, (list,))
+
+    def check_value(self, value):
+        if not all(isinstance(item, str) for item in value):
+            return "{} must be a list of strings".format(self._name)
+        return None
+
+
+class ResponseSchema:
+    #ordered set of FieldSpecs. Add a field or a new kind of check without editing validate().
+
+    def __init__(self, fields):
+        self._fields = tuple(fields)  # aggregation: specs are built outside and can be reused
+        if not all(isinstance(spec, FieldSpec) for spec in self._fields):
+            raise TypeError("all schema fields must implement FieldSpec")
+
+    def validate(self, data):
+        """structure validation only. Returns an error string or None.
+
+        Every field's presence and type is checked before any field's value, so a
+        missing field is always reported ahead of an out-of-range one.
+        """
+        if not isinstance(data, dict):
+            return "response is not a JSON object"
+        for spec in self._fields:
+            error = spec.check_type(data)
+            if error:
+                return error
+        for spec in self._fields:
+            error = spec.check_value(data[spec.name])
+            if error:
+                return error
+        return None
+
+    @classmethod
+    def for_session_plan(cls):
+        #the shape SessionPromptBuilder asks Claude to reply with.
+        return cls([
+            TypedField("exercise_type", (str,)),
+            TypedField("activity", (str,)),
+            TypedField("duration_min", (int, float)),
+            ChoiceField("intensity", INTENSITY_VALUES),
+            TypedField("target_hr_bpm", (int, float)),
+            TypedField("target_pace_min_per_km", (int, float, type(None))),
+            StringListField("equipment_used"),
+            TypedField("warmup", (str,)),
+            TypedField("main_set", (str,)),
+            TypedField("cooldown", (str,)),
+            TypedField("rationale", (str,)),
+            ChoiceField("risk_level", RISK_VALUES),
+        ])
+
+
+class ResponseParser:
+    #turns raw text into a validated dict.
+
+    _CODE_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$")
+
+    def __init__(self, schema):
+        self._schema = schema
+
+    def parse(self, text):
+        """Return (data, error). Exactly one of them is None."""
+        if not isinstance(text, str) or not text.strip():
+            return None, "empty response"
+        try:
+            data = json.loads(self._extract_json_text(text))
+        except json.JSONDecodeError as exc:
+            return None, "invalid JSON: {}".format(exc)
+        error = self._schema.validate(data)
+        if error:
+            return None, error
+        return data, None
+
+    def _extract_json_text(self, text):
+        #Strip code fences / surrounding chatter and return the JSON substring.
+        text = self._CODE_FENCE.sub("", text.strip())
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            return text
+        return text[start:end + 1]
+
+# --------------------------------------------------------------------------- #
+# Prompts
+# --------------------------------------------------------------------------- #
+class SessionPromptBuilder:
+    """Owns all prompt wording for planning a session."""
+
+    _SYSTEM_PROMPT = """You are an exercise-planning assistant inside a fitness coaching app.
 You receive a JSON payload with the user's profile (including sex, equipment, days_per_week
 and session_duration_min), their recent session history (planned vs actual: pace, heart rate,
 RPE, pain/discomfort, comments), the weekly_plan_target for this session, and optionally
@@ -68,108 +250,105 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
   "risk_level": "low" | "medium" | "high"
 }"""
 
+    @property
+    def system_prompt(self):
+        return self._SYSTEM_PROMPT
 
-def build_user_prompt(profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
-    payload = {
-        "profile": profile,
-        "weekly_plan_target": weekly_target,
-        "recent_sessions": history,
-        "user_rejection_reason": user_feedback,
-        "safety_rule_violations_to_fix": rule_feedback,
-    }
-    return "Plan the next session for this user:\n" + json.dumps(payload, indent=2)
+    def build(self, request):
+        return "Plan the next session for this user:\n" + json.dumps(request.to_payload(), indent=2)
 
+    def build_retry(self, base_prompt, schema_error):
+        """Re-ask after a malformed reply, telling the model what was wrong."""
+        return (base_prompt + "\n\nYour previous reply was rejected: " + schema_error +
+                ". Reply with ONLY the JSON object in the required shape.")
 
-def extract_json_text(text):
-    """Strip code fences / surrounding chatter and return the JSON substring."""
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        return text
-    return text[start:end + 1]
+# --------------------------------------------------------------------------- #
+# Model clients
+# --------------------------------------------------------------------------- #
+class LLMClient(ABC):
+    """Interface for any chat model the AI layer can call.
 
+    Contract for every implementation: return (text, error_message) with exactly one
+    of them None, and never raise - the app must not crash on an AI failure.
+    """
 
-def validate_schema(data):
-    """Structural validation only. Returns an error string or None."""
-    if not isinstance(data, dict):
-        return "response is not a JSON object"
-    for field, types in RESPONSE_SCHEMA.items():
-        if field not in data:
-            return "missing field: " + field
-        value = data[field]
-        if isinstance(value, bool) or not isinstance(value, types):
-            return "wrong type for field: " + field
-    if not all(isinstance(item, str) for item in data["equipment_used"]):
-        return "equipment_used must be a list of strings"
-    if data["intensity"] not in INTENSITY_VALUES:
-        return "intensity must be one of {}".format(INTENSITY_VALUES)
-    if data["risk_level"] not in RISK_VALUES:
-        return "risk_level must be one of {}".format(RISK_VALUES)
-    return None
+    @abstractmethod
+    def complete(self, system_prompt, user_prompt):
+        #Send one request and return (text, error_message).
 
 
-def parse_and_validate_response(text):
-    """Return (data, error). Exactly one of them is None."""
-    if not isinstance(text, str) or not text.strip():
-        return None, "empty response"
-    try:
-        data = json.loads(extract_json_text(text))
-    except json.JSONDecodeError as exc:
-        return None, "invalid JSON: {}".format(exc)
-    error = validate_schema(data)
-    if error:
-        return None, error
-    return data, None
+class ClaudeClient(LLMClient):
+    #LLMClient backed by the Anthropic Messages API.
 
+    def __init__(self, config):
+        self._config = config
+        self._client = None  # built on the first call, then reused
 
-def call_claude(system_prompt, user_prompt):
-    """Single API call. Returns (text, error_message). Never raises."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return None, "ANTHROPIC_API_KEY is not set"
-    try:
-        import anthropic
-    except ImportError:
-        return None, "the 'anthropic' package is not installed"
-    try:
-        client = anthropic.Anthropic(timeout=API_TIMEOUT_SECONDS, max_retries=2)
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1000,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        text = "".join(b.text for b in response.content if b.type == "text")
-        return text, None
-    except anthropic.APITimeoutError:
-        logger.error("Claude API timed out")
-        return None, "the AI service timed out"
-    except anthropic.APIConnectionError as exc:
-        logger.error("Claude API connection failure: %s", exc)
-        return None, "could not connect to the AI service"
-    except anthropic.APIStatusError as exc:
-        logger.error("Claude API status error %s: %s", exc.status_code, exc)
-        return None, "the AI service returned an error (HTTP {})".format(exc.status_code)
-    except Exception as exc:  # last resort: the app must never crash on an AI failure
-        logger.exception("Unexpected AI error: %s", exc)
-        return None, "unexpected AI error"
+    def complete(self, system_prompt, user_prompt):
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return None, "ANTHROPIC_API_KEY is not set"
+        if anthropic is None:
+            return None, "the 'anthropic' package is not installed"
+        try:
+            response = self._sdk_client().messages.create(
+                model=self._config.model,
+                max_tokens=self._config.max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return "".join(b.text for b in response.content if b.type == "text"), None
+        except anthropic.APITimeoutError:  # subclass of APIConnectionError, so it must come first
+            logger.error("Claude API timed out")
+            return None, "the AI service timed out"
+        except anthropic.APIConnectionError as exc:
+            logger.error("Claude API connection failure: %s", exc)
+            return None, "could not connect to the AI service"
+        except anthropic.APIStatusError as exc:
+            logger.error("Claude API status error %s: %s", exc.status_code, exc)
+            return None, "the AI service returned an error (HTTP {})".format(exc.status_code)
+        except Exception as exc:  # last resort: the app must never crash on an AI failure
+            logger.exception("Unexpected AI error: %s", exc)
+            return None, "unexpected AI error"
 
+    def _sdk_client(self):
+        if self._client is None:
+            self._client = anthropic.Anthropic(timeout=self._config.timeout_seconds,
+                                               max_retries=self._config.sdk_max_retries)
+        return self._client
 
-def request_session(profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
-    """Ask Claude for the next session.
-    Returns {"ok": bool, "data": dict|None, "error": str|None}."""
-    base_prompt = build_user_prompt(profile, history, user_feedback, rule_feedback, weekly_target)
-    prompt = base_prompt
-    last_error = "unknown error"
-    for attempt in range(1, MAX_SCHEMA_ATTEMPTS + 1):
-        text, api_error = call_claude(SYSTEM_PROMPT, prompt)
-        if api_error:
-            return {"ok": False, "data": None, "error": api_error}
-        data, schema_error = parse_and_validate_response(text)
-        if schema_error is None:
-            return {"ok": True, "data": data, "error": None}
-        last_error = schema_error
-        logger.warning("Malformed AI output (attempt %d): %s", attempt, schema_error)
-        prompt = (base_prompt + "\n\nYour previous reply was rejected: " + schema_error +
-                  ". Reply with ONLY the JSON object in the required shape.")
-    return {"ok": False, "data": None, "error": "AI returned malformed output: " + last_error}
+# --------------------------------------------------------------------------- #
+# Facade
+# --------------------------------------------------------------------------- #
+class AIManager:
+    """Entry point for the controller: builds the prompt, calls the model, returns a validated AIResult.
+
+    Composition: the prompt builder and parser are created here and live only as long as the manager.
+    Association: the LLMClient is handed in from outside and only used, so tests can pass a stub
+    and any LLMClient implementation works without changes here.
+    """
+
+    def __init__(self, client=None, config=None):
+        self._config = config or AIConfig.from_env()
+        self._client = client if client is not None else ClaudeClient(self._config)
+        if not isinstance(self._client, LLMClient):
+            raise TypeError("client must implement LLMClient")
+        self._prompts = SessionPromptBuilder()
+        self._parser = ResponseParser(ResponseSchema.for_session_plan())
+
+    def request_session(self, profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
+        """Ask the model for the next session, re-asking if the reply is malformed."""
+        request = SessionRequest(profile, history, user_feedback, rule_feedback, weekly_target)
+        base_prompt = self._prompts.build(request)
+        prompt = base_prompt
+        last_error = "unknown error"
+        for attempt in range(1, self._config.max_schema_attempts + 1):
+            text, api_error = self._client.complete(self._prompts.system_prompt, prompt)
+            if api_error:
+                return AIResult.failure(api_error)
+            data, schema_error = self._parser.parse(text)
+            if schema_error is None:
+                return AIResult.success(data)
+            last_error = schema_error
+            logger.warning("Malformed AI output (attempt %d): %s", attempt, schema_error)
+            prompt = self._prompts.build_retry(base_prompt, schema_error)
+        return AIResult.failure("AI returned malformed output: " + last_error)

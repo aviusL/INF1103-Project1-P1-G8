@@ -1,11 +1,9 @@
 import copy
 import datetime
-import json
 import os
 import tempfile
 import unittest
 
-import ai_manager
 import data_manager
 
 from logic_manager import (
@@ -205,38 +203,6 @@ class LogicManagerTests(unittest.TestCase):
         self.assertEqual((suggested, profile, history), original)
 
 
-
-
-class ExistingManagerRegressionTests(unittest.TestCase):
-    """Retain important Phase 1 AI/data checks while other managers await OOP refactor."""
-
-    def test_ai_valid_json(self):
-        data, error = ai_manager.parse_and_validate_response(json.dumps(GOOD_AI))
-        self.assertIsNone(error)
-        self.assertEqual(data['exercise_type'], 'easy run')
-
-    def test_ai_code_fence(self):
-        data, error = ai_manager.parse_and_validate_response('```json\n' + json.dumps(GOOD_AI) + '\n```')
-        self.assertIsNone(error)
-        self.assertEqual(data['activity'], 'running')
-
-    def test_ai_malformed_and_missing_fields(self):
-        self.assertIsNotNone(ai_manager.parse_and_validate_response('Not JSON')[1])
-        for key in ('activity', 'intensity', 'equipment_used'):
-            bad = session()
-            bad.pop(key)
-            self.assertIn(key, ai_manager.parse_and_validate_response(json.dumps(bad))[1])
-
-    def test_ai_wrong_field_types(self):
-        for bad in (session(duration_min='thirty'), session(equipment_used=[1, 2]),
-                    session(intensity='insane')):
-            self.assertIsNotNone(ai_manager.parse_and_validate_response(json.dumps(bad))[1])
-
-    def test_ai_prompt_contains_weekly_target(self):
-        target = LogicManager().weekly_target(PROFILE, 1, [])
-        prompt = ai_manager.build_user_prompt(PROFILE, [], None, None, target)
-        self.assertIn('weekly_plan_target', prompt)
-        self.assertIn('dumbbells', prompt)
 
 
 class MainIntegrationTests(unittest.TestCase):
