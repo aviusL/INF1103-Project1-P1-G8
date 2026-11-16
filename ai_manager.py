@@ -98,7 +98,7 @@ class FieldSpec(ABC):
     @abstractmethod
     def check_value(self, value):
         #return an error if a correctly typed value is still not allowed, else None.
-
+        pass
 
 class TypedField(FieldSpec):
     #any value of the right type is accepted.
@@ -275,6 +275,7 @@ class LLMClient(ABC):
     @abstractmethod
     def complete(self, system_prompt, user_prompt):
         #Send one request and return (text, error_message).
+        pass
 
 
 class ClaudeClient(LLMClient):
