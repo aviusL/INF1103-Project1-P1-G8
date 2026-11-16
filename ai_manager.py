@@ -261,3 +261,57 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
         """Re-ask after a malformed reply, telling the model what was wrong."""
         return (base_prompt + "\n\nYour previous reply was rejected: " + schema_error +
                 ". Reply with ONLY the JSON object in the required shape.")
+
+# --------------------------------------------------------------------------- #
+# Model clients
+# --------------------------------------------------------------------------- #
+class LLMClient(ABC):
+    """Interface for any chat model the AI layer can call.
+
+    Contract for every implementation: return (text, error_message) with exactly one
+    of them None, and never raise - the app must not crash on an AI failure.
+    """
+
+    @abstractmethod
+    def complete(self, system_prompt, user_prompt):
+        #Send one request and return (text, error_message).
+
+
+class ClaudeClient(LLMClient):
+    #LLMClient backed by the Anthropic Messages API.
+
+    def __init__(self, config):
+        self._config = config
+        self._client = None  # built on the first call, then reused
+
+    def complete(self, system_prompt, user_prompt):
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return None, "ANTHROPIC_API_KEY is not set"
+        if anthropic is None:
+            return None, "the 'anthropic' package is not installed"
+        try:
+            response = self._sdk_client().messages.create(
+                model=self._config.model,
+                max_tokens=self._config.max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return "".join(b.text for b in response.content if b.type == "text"), None
+        except anthropic.APITimeoutError:  # subclass of APIConnectionError, so it must come first
+            logger.error("Claude API timed out")
+            return None, "the AI service timed out"
+        except anthropic.APIConnectionError as exc:
+            logger.error("Claude API connection failure: %s", exc)
+            return None, "could not connect to the AI service"
+        except anthropic.APIStatusError as exc:
+            logger.error("Claude API status error %s: %s", exc.status_code, exc)
+            return None, "the AI service returned an error (HTTP {})".format(exc.status_code)
+        except Exception as exc:  # last resort: the app must never crash on an AI failure
+            logger.exception("Unexpected AI error: %s", exc)
+            return None, "unexpected AI error"
+
+    def _sdk_client(self):
+        if self._client is None:
+            self._client = anthropic.Anthropic(timeout=self._config.timeout_seconds,
+                                               max_retries=self._config.sdk_max_retries)
+        return self._client
