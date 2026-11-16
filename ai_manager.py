@@ -315,3 +315,40 @@ class ClaudeClient(LLMClient):
             self._client = anthropic.Anthropic(timeout=self._config.timeout_seconds,
                                                max_retries=self._config.sdk_max_retries)
         return self._client
+
+# --------------------------------------------------------------------------- #
+# Facade
+# --------------------------------------------------------------------------- #
+class AIManager:
+    """Entry point for the controller: builds the prompt, calls the model, returns a validated AIResult.
+
+    Composition: the prompt builder and parser are created here and live only as long as the manager.
+    Association: the LLMClient is handed in from outside and only used, so tests can pass a stub
+    and any LLMClient implementation works without changes here.
+    """
+
+    def __init__(self, client=None, config=None):
+        self._config = config or AIConfig.from_env()
+        self._client = client if client is not None else ClaudeClient(self._config)
+        if not isinstance(self._client, LLMClient):
+            raise TypeError("client must implement LLMClient")
+        self._prompts = SessionPromptBuilder()
+        self._parser = ResponseParser(ResponseSchema.for_session_plan())
+
+    def request_session(self, profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
+        """Ask the model for the next session, re-asking if the reply is malformed."""
+        request = SessionRequest(profile, history, user_feedback, rule_feedback, weekly_target)
+        base_prompt = self._prompts.build(request)
+        prompt = base_prompt
+        last_error = "unknown error"
+        for attempt in range(1, self._config.max_schema_attempts + 1):
+            text, api_error = self._client.complete(self._prompts.system_prompt, prompt)
+            if api_error:
+                return AIResult.failure(api_error)
+            data, schema_error = self._parser.parse(text)
+            if schema_error is None:
+                return AIResult.success(data)
+            last_error = schema_error
+            logger.warning("Malformed AI output (attempt %d): %s", attempt, schema_error)
+            prompt = self._prompts.build_retry(base_prompt, schema_error)
+        return AIResult.failure("AI returned malformed output: " + last_error)
