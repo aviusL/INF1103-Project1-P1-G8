@@ -312,7 +312,61 @@ class OutputManager:
             self.show_message(self.format_session_record(record))
         self.show_message(ConsoleFormatter.LIGHT_RULE)
 
+    # ---------- weekly progress report (Phase 2 new feature) ----------
+    @staticmethod
+    def _amount(value):
+        """30.0 -> '30', 6.5 -> '6.5'."""
+        return str(int(value)) if float(value).is_integer() else "{:.1f}".format(value)
 
+    @staticmethod
+    def _day(day):
+        return "{} {}".format(day.day, day.strftime("%b %Y"))
+
+    @staticmethod
+    def _mix(counts):
+        return ", ".join("{} {}".format(name, count) for name, count in counts.items()) or "-"
+
+    def _week_column(self, week):
+        """One week's values for the report table, in the same order as the row labels."""
+        pct = "" if week.adherence_pct is None else " ({}%)".format(week.adherence_pct)
+        return [
+            "{} of {}{}".format(week.sessions, week.planned_sessions, pct),
+            "{} of {} planned".format(self._amount(week.minutes), self._amount(week.planned_minutes)),
+            "-" if week.avg_rpe is None else "RPE {}".format(self._amount(week.avg_rpe)),
+            "-" if week.avg_hr is None else "{} bpm".format(round(week.avg_hr)),
+            str(week.pain_sessions) if week.pain_sessions else "none",
+        ]
+
+    def format_progress_report(self, report, coach_note=None, note_error=None):
+        this, last = report.this_week, report.last_week
+        table = "{:<16}{:<20}{}"
+        lines = [
+            ConsoleFormatter.section_title("Weekly progress report"),
+            "Week of {} (compared with {})".format(self._day(this.week_start), self._day(last.week_start)),
+            "",
+            table.format("", "This week", "Last week"),
+        ]
+        labels = ("Sessions", "Minutes", "Avg effort", "Avg heart rate", "Pain reported")
+        for label, now, before in zip(labels, self._week_column(this), self._week_column(last)):
+            lines.append(table.format(label, now, before))
+        lines += ["",
+                  ConsoleFormatter.labelled("Intensity", self._mix(this.intensity_counts)),
+                  ConsoleFormatter.labelled("Activity", self._mix(this.activity_counts))]
+        if report.insights:
+            lines += ["", ConsoleFormatter.bold("Observations")]
+            lines += [textwrap.fill(text, width=ConsoleFormatter.LINE_WIDTH, initial_indent="  - ",
+                                    subsequent_indent="    ") for text in report.insights]
+        if coach_note:
+            lines += ["", ConsoleFormatter.bold("Coach's note"),
+                      ConsoleFormatter.labelled("Summary", coach_note["summary"]),
+                      ConsoleFormatter.labelled("Next week", coach_note["focus_next_week"])]
+        elif note_error:
+            lines += ["", "Coach's note unavailable: {}.".format(note_error)]
+        lines.append(ConsoleFormatter.LIGHT_RULE)
+        return "\n".join(lines)
+
+    def show_progress_report(self, report, coach_note=None, note_error=None):
+        self.show_message(self.format_progress_report(report, coach_note, note_error))
 #Create shared INSTANCES
 out_put = OutputManager()
 in_put = InputManager(out_put)
