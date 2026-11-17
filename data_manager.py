@@ -251,6 +251,17 @@ class PainReportedFilter(SessionFilter):
     def matches(self, record):
         return record.pain_reported
 
+
+class WeekFilter(SessionFilter):
+    """Sessions logged in the same Monday-Sunday week as `day` (weekly progress report)."""
+
+    def __init__(self, day):
+        self._week = tuple(day.isocalendar())[:2]
+
+    def matches(self, record):
+        logged = record.logged_on
+        return logged is not None and tuple(logged.isocalendar())[:2] == self._week
+
 class SessionHistory:
 
     def __init__(self, records=None):
@@ -388,6 +399,15 @@ class DataManager:
 
     def query_sessions(self, *filters):
         return [record.to_dict() for record in self._history.query(*filters)]
+
+    def week_start(self, weeks_ago=0):
+        """Monday of this week (0), last week (1), and so on."""
+        day = self._clock() - datetime.timedelta(weeks=weeks_ago)
+        return day - datetime.timedelta(days=day.weekday())
+
+    def sessions_in_week(self, weeks_ago=0):
+        """Sessions logged in this week (0), last week (1), and so on."""
+        return self.query_sessions(WeekFilter(self.week_start(weeks_ago)))
 
     def filter_sessions(self, min_rpe=None, pain_only=False):
         filters = []
