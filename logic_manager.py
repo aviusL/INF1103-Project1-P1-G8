@@ -3,6 +3,7 @@
 Input: validated AI session dictionaries, profile dictionaries, and stored history.
 Output: weekly targets, decisions and validation errors.
 """
+import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
@@ -284,11 +285,169 @@ class SessionLogValidator:
         return errors
 
 
+# --------------------------------------------------------------------------- #
+# Weekly progress report (Phase 2 new feature)
+# --------------------------------------------------------------------------- #
+EFFORT_RISE_LIMIT = 1.5  # average RPE points; a bigger week-on-week rise is worth pointing out
+
+
+def _number(value):
+    """The value if it is a real number, else None (ignores text, bools and missing values)."""
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _average(values):
+    values = [value for value in values if value is not None]
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def _count(values):
+    counts = {}
+    for value in values:
+        if isinstance(value, str) and value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+@dataclass(frozen=True)
+class WeekSummary:
+    """Totals for one Monday-Sunday week of logged sessions."""
+    week_start: datetime.date
+    sessions: int
+    planned_sessions: int
+    minutes: float
+    planned_minutes: float
+    avg_rpe: Optional[float]
+    avg_hr: Optional[float]
+    pain_sessions: int
+    intensity_counts: dict
+    activity_counts: dict
+
+    @classmethod
+    def from_sessions(cls, week_start, sessions, planned_sessions):
+        plans = [session.get('planned') or {} for session in sessions]
+        actuals = [session.get('actual') or {} for session in sessions]
+        return cls(
+            week_start=week_start,
+            sessions=len(sessions),
+            planned_sessions=planned_sessions,
+            minutes=sum(_number(actual.get('duration_min')) or 0 for actual in actuals),
+            planned_minutes=sum(_number(plan.get('duration_min')) or 0 for plan in plans),
+            avg_rpe=_average(_number(actual.get('rpe')) for actual in actuals),
+            avg_hr=_average(_number(actual.get('avg_hr_bpm')) for actual in actuals),
+            pain_sessions=sum(1 for actual in actuals if actual.get('pain_reported') is True),
+            intensity_counts=_count(plan.get('intensity') for plan in plans),
+            activity_counts=_count(plan.get('activity') for plan in plans),
+        )
+
+    @property
+    def adherence_pct(self):
+        return round(100 * self.sessions / self.planned_sessions) if self.planned_sessions else None
+
+    def to_dict(self):
+        return {
+            'week_start': self.week_start.isoformat(),
+            'sessions_done': self.sessions,
+            'sessions_planned': self.planned_sessions,
+            'minutes_done': self.minutes,
+            'minutes_planned': self.planned_minutes,
+            'average_rpe': self.avg_rpe,
+            'average_heart_rate_bpm': self.avg_hr,
+            'sessions_with_pain': self.pain_sessions,
+            'intensity_mix': dict(self.intensity_counts),
+            'activities': dict(self.activity_counts),
+        }
+
+
+class ProgressInsight(ABC):
+    """Interface for one observation about the week. Add a subclass to add a tip."""
+
+    @abstractmethod
+    def describe(self, current: WeekSummary, previous: WeekSummary) -> list[str]:
+        """Return short observations; an empty list means nothing to say."""
+
+
+class AdherenceInsight(ProgressInsight):
+    def describe(self, current, previous):
+        done, planned = current.sessions, current.planned_sessions
+        if done == 0:
+            return [f'No sessions logged this week yet ({planned} planned).']
+        if done < planned:
+            return [f'{done} of {planned} planned sessions done, {planned - done} to go.']
+        return [f'Weekly target reached: {done} of {planned} planned sessions done.']
+
+
+class VolumeInsight(ProgressInsight):
+    def describe(self, current, previous):
+        if previous.minutes and current.minutes > PROGRESSION_LIMIT * previous.minutes:
+            rise = round(100 * (current.minutes / previous.minutes - 1))
+            limit = round(100 * (PROGRESSION_LIMIT - 1))
+            return [f'Training time is up {rise}% on last week; rises over {limit}% raise injury risk.']
+        return []
+
+
+class EffortInsight(ProgressInsight):
+    def describe(self, current, previous):
+        now, before = current.avg_rpe, previous.avg_rpe
+        if now is not None and now >= HIGH_RPE:
+            return [f'Average effort is high (RPE {now}); make the next session an easy one.']
+        if now is not None and before is not None and now - before >= EFFORT_RISE_LIMIT:
+            return [f'Average effort rose from RPE {before} last week to RPE {now}.']
+        return []
+
+
+class PainInsight(ProgressInsight):
+    def describe(self, current, previous):
+        count = current.pain_sessions
+        if not count:
+            return []
+        sessions = 'session' if count == 1 else 'sessions'
+        return [f'Pain reported in {count} {sessions} this week. The coach will not plan high intensity '
+                'straight after pain; see a professional if it continues.']
+
+
+@dataclass(frozen=True)
+class ProgressReport:
+    """This week compared with last week, plus the observations that apply."""
+    this_week: WeekSummary
+    last_week: WeekSummary
+    insights: tuple
+
+    @property
+    def has_sessions(self):
+        return bool(self.this_week.sessions or self.last_week.sessions)
+
+    def to_dict(self):
+        return {
+            'this_week': self.this_week.to_dict(),
+            'last_week': self.last_week.to_dict(),
+            'observations': list(self.insights),
+        }
+
+
+class WeeklyReporter:
+    """Builds a ProgressReport from two weeks of sessions. Insights are pluggable (OCP)."""
+    def __init__(self, insights=None):
+        self._insights = list(insights) if insights is not None else [
+            AdherenceInsight(), VolumeInsight(), EffortInsight(), PainInsight(),
+        ]
+        if not all(isinstance(insight, ProgressInsight) for insight in self._insights):
+            raise TypeError('all insights must implement ProgressInsight')
+
+    def build(self, profile, this_week_sessions, last_week_sessions, week_start):
+        planned = ProfilePreferences(profile).available_days()
+        current = WeekSummary.from_sessions(week_start, this_week_sessions, planned)
+        previous = WeekSummary.from_sessions(week_start - datetime.timedelta(days=7), last_week_sessions, planned)
+        insights = tuple(text for insight in self._insights for text in insight.describe(current, previous))
+        return ProgressReport(current, previous, insights)
+
+
 class LogicManager:
-    """Facade for other managers. Owns evaluator and validator (composition)."""
-    def __init__(self, rules=None):
+    """Facade for other managers. Owns evaluator, validator and reporter (composition)."""
+    def __init__(self, rules=None, insights=None):
         self._evaluator = SessionEvaluator(rules)
         self._log_validator = SessionLogValidator()
+        self._reporter = WeeklyReporter(insights)
 
     def evaluate_session(self, session, profile, history, weekly_target=None):
         return self._evaluator.evaluate(EvaluationContext(session, profile, history, weekly_target))
@@ -310,3 +469,6 @@ class LogicManager:
 
     def validate_session_log(self, log, profile):
         return self._log_validator.validate(log, profile)
+
+    def weekly_progress_report(self, profile, this_week_sessions, last_week_sessions, week_start):
+        return self._reporter.build(profile, this_week_sessions, last_week_sessions, week_start)
