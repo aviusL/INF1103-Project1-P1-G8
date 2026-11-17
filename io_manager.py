@@ -76,7 +76,7 @@ class InputManager:
     
     def prompt_required_text(self,label):
         while True:
-            value = (label + ": ").strip()
+            value = self._read(label + ": ").strip()
             if value:
                 return value
             self.out_put.show_error("This field cannot be empty.")
