@@ -37,7 +37,7 @@ def generate_valid_session(data, user_feedback=None, weekly_target=None):  # [da
     if weekly_target is None:
         weekly_target = current_weekly_target(data)  # [data_manager OOP]
     rule_feedback = None
-        for _ in range(MAX_AI_ATTEMPTS):
+    for _ in range(MAX_AI_ATTEMPTS):
         result = ai.request_session(profile, history, user_feedback, rule_feedback, weekly_target)
         if not result.ok:
             io___manager_output.show_error("Coach unavailable: {}. Please try again later.".format(result.error))
@@ -46,6 +46,9 @@ def generate_valid_session(data, user_feedback=None, weekly_target=None):  # [da
         if decision["outcome"] != "reject":
             return result.data, decision
         rule_feedback = decision["reasons"]
+        io___manager_output.show_message("The first draft broke safety rules; asking the coach to revise...")
+    io___manager_output.show_error("The coach could not produce a safe session. Please try again.")
+    return None, None
 
 
 def run_setup(data):  # [data_manager OOP]
