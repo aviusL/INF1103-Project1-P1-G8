@@ -118,7 +118,7 @@ class FitnessApp(App):
         input_box.focus = True # user cursors go back  to typing box, so no need click again after every input.
 
     def run_coach(self):
-        """Allows app window to close automatically after user presses 6. """
+        """Allows app window to close automatically after user presses 7. """
         main.main()
         time.sleep(0.8) #Time set before closing window
         Clock.schedule_once(lambda dt: App.get_running_app().stop())
