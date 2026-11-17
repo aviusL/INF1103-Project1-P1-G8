@@ -1,10 +1,11 @@
 """main.py - Controller. Wires the four managers together; no console output, no business rules."""
-import ai_manager
-from data_manager import AppLogger, DataConfig, DataManager  # [data_manager OOP]
+from ai_manager import AIManager  
+from data_manager import AppLogger, DataConfig, DataManager  
 import io_manager
 from logic_manager import LogicManager
 
 logic = LogicManager()
+ai = AIManager()  
 
 # Get the OUTPUT class from io_manager module
 io___manager_output = io_manager.OutputManager()
