@@ -135,14 +135,15 @@ class InputManager:
         self.out_put.show_message("3) Log a completed session" + ("  <- you have a session waiting" if has_pending else ""))
         self.out_put.show_message("4) View history")
         self.out_put.show_message("5) Reset all data")
-        self.out_put.show_message("6) Quit")
+        self.out_put.show_message("6) Weekly progress report")
+        self.out_put.show_message("7) Quit")
         self.out_put.show_message(ConsoleFormatter.LIGHT_RULE)
-        keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "reset", "6": "quit"}
+        keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "reset", "6": "report", "7": "quit"}
         while True:
             raw = self._read("Choose an option: ").strip()
             if raw in keys:
                 return keys[raw]
-            self.out_put.show_error("Please enter a number from 1 to 6.")
+            self.out_put.show_error("Please enter a number from 1 to 7.")
     
     
     def prompt_confirm_reset(self):
