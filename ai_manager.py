@@ -54,6 +54,21 @@ class SessionRequest:
 
 
 @dataclass(frozen=True)
+class WeeklyNoteRequest:
+    #everything the AI needs to write a coaching note on one week of training
+    _PROFILE_FIELDS = ("fitness_goal", "fitness_level", "health_concerns", "days_per_week", "preferred_activities")
+
+    profile: dict
+    report: dict
+
+    def to_payload(self):
+        return {
+            "profile": {field: self.profile.get(field) for field in self._PROFILE_FIELDS},
+            "weekly_report": self.report,
+        }
+
+
+@dataclass(frozen=True)
 class AIResult:
     #outcome of one ai request. when ok is True data is set, otherwise error is.
     ok: bool
@@ -131,6 +146,18 @@ class StringListField(FieldSpec):
         return None
 
 
+class NonEmptyTextField(FieldSpec):
+    #string that must contain some text; a blank coaching note is useless to the user
+
+    def __init__(self, name):
+        super().__init__(name, (str,))
+
+    def check_value(self, value):
+        if not value.strip():
+            return "{} must not be empty".format(self._name)
+        return None
+
+
 class ResponseSchema:
     #ordered set of FieldSpecs. Add a field or a new kind of check without editing validate().
 
@@ -175,6 +202,14 @@ class ResponseSchema:
             ChoiceField("risk_level", RISK_VALUES),
         ])
 
+    @classmethod
+    def for_weekly_note(cls):
+        #the shape WeeklyNotePromptBuilder asks Claude to reply with.
+        return cls([
+            NonEmptyTextField("summary"),
+            NonEmptyTextField("focus_next_week"),
+        ])
+
 
 class ResponseParser:
     #turns raw text into a validated dict.
@@ -208,7 +243,35 @@ class ResponseParser:
 # --------------------------------------------------------------------------- #
 # Prompts
 # --------------------------------------------------------------------------- #
-class SessionPromptBuilder:
+class PromptBuilder(ABC):
+    """Base for every prompt the AI layer sends.
+
+    Subclasses supply the wording; this class supplies the shared JSON rendering and
+    the retry message, so AIManager can drive any of them the same way.
+    """
+
+    @property
+    @abstractmethod
+    def system_prompt(self):
+        #instructions sent as the system prompt.
+        pass
+
+    @property
+    @abstractmethod
+    def intro(self):
+        #first line of the user prompt, placed above the JSON payload.
+        pass
+
+    def build(self, request):
+        return self.intro + "\n" + json.dumps(request.to_payload(), indent=2)
+
+    def build_retry(self, base_prompt, schema_error):
+        """Re-ask after a malformed reply, telling the model what was wrong."""
+        return (base_prompt + "\n\nYour previous reply was rejected: " + schema_error +
+                ". Reply with ONLY the JSON object in the required shape.")
+
+
+class SessionPromptBuilder(PromptBuilder):
     """Owns all prompt wording for planning a session."""
 
     _SYSTEM_PROMPT = """You are an exercise-planning assistant inside a fitness coaching app.
@@ -254,13 +317,38 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
     def system_prompt(self):
         return self._SYSTEM_PROMPT
 
-    def build(self, request):
-        return "Plan the next session for this user:\n" + json.dumps(request.to_payload(), indent=2)
+    @property
+    def intro(self):
+        return "Plan the next session for this user:"
 
-    def build_retry(self, base_prompt, schema_error):
-        """Re-ask after a malformed reply, telling the model what was wrong."""
-        return (base_prompt + "\n\nYour previous reply was rejected: " + schema_error +
-                ". Reply with ONLY the JSON object in the required shape.")
+
+class WeeklyNotePromptBuilder(PromptBuilder):
+    """Owns all prompt wording for the coaching note in the weekly progress report."""
+
+    _SYSTEM_PROMPT = """You are the coach inside a fitness coaching app, writing a short note about the user's training week.
+You receive a JSON payload with the user's profile (goal, fitness level, health concerns, days_per_week,
+preferred activities) and a weekly_report calculated by the app: this_week and last_week totals
+(sessions done vs planned, minutes done vs planned, average RPE and heart rate, sessions with pain,
+intensity mix, activities) and the app's own observations.
+
+Write in plain, encouraging language addressed to the user as "you". Base every statement on the numbers
+given and never invent sessions or results. Relate the week to the user's goal. If pain was reported or
+health concerns are listed, advise caution and suggest seeing a professional if pain continues; never
+diagnose. Keep the whole note under 90 words.
+
+Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
+{
+  "summary": "string, 2-3 sentences on how this week went compared with last week",
+  "focus_next_week": "string, 1-2 sentences with one concrete focus for next week"
+}"""
+
+    @property
+    def system_prompt(self):
+        return self._SYSTEM_PROMPT
+
+    @property
+    def intro(self):
+        return "Write the weekly coaching note for this user:"
 
 # --------------------------------------------------------------------------- #
 # Model clients
@@ -323,7 +411,7 @@ class ClaudeClient(LLMClient):
 class AIManager:
     """Entry point for the controller: builds the prompt, calls the model, returns a validated AIResult.
 
-    Composition: the prompt builder and parser are created here and live only as long as the manager.
+    Composition: the prompt builders and parsers are created here and live only as long as the manager.
     Association: the LLMClient is handed in from outside and only used, so tests can pass a stub
     and any LLMClient implementation works without changes here.
     """
@@ -333,23 +421,33 @@ class AIManager:
         self._client = client if client is not None else ClaudeClient(self._config)
         if not isinstance(self._client, LLMClient):
             raise TypeError("client must implement LLMClient")
-        self._prompts = SessionPromptBuilder()
-        self._parser = ResponseParser(ResponseSchema.for_session_plan())
+        self._session_prompts = SessionPromptBuilder()
+        self._session_parser = ResponseParser(ResponseSchema.for_session_plan())
+        self._note_prompts = WeeklyNotePromptBuilder()
+        self._note_parser = ResponseParser(ResponseSchema.for_weekly_note())
 
     def request_session(self, profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
         """Ask the model for the next session, re-asking if the reply is malformed."""
         request = SessionRequest(profile, history, user_feedback, rule_feedback, weekly_target)
-        base_prompt = self._prompts.build(request)
+        return self._ask(self._session_prompts, self._session_parser, request)
+
+    def request_weekly_note(self, profile, report):
+        """Ask the model for a short coaching note on a weekly progress report (a plain dict)."""
+        return self._ask(self._note_prompts, self._note_parser, WeeklyNoteRequest(profile, report))
+
+    def _ask(self, prompts, parser, request):
+        """Shared request loop for any PromptBuilder: call the model, re-ask once if the reply is malformed."""
+        base_prompt = prompts.build(request)
         prompt = base_prompt
         last_error = "unknown error"
         for attempt in range(1, self._config.max_schema_attempts + 1):
-            text, api_error = self._client.complete(self._prompts.system_prompt, prompt)
+            text, api_error = self._client.complete(prompts.system_prompt, prompt)
             if api_error:
                 return AIResult.failure(api_error)
-            data, schema_error = self._parser.parse(text)
+            data, schema_error = parser.parse(text)
             if schema_error is None:
                 return AIResult.success(data)
             last_error = schema_error
             logger.warning("Malformed AI output (attempt %d): %s", attempt, schema_error)
-            prompt = self._prompts.build_retry(base_prompt, schema_error)
+            prompt = prompts.build_retry(base_prompt, schema_error)
         return AIResult.failure("AI returned malformed output: " + last_error)
