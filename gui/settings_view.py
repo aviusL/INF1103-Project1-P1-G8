@@ -13,8 +13,10 @@ from gui.theme import Palette
 from gui.widgets import detail_rows, field_border, heading, label, panel, primary_button, secondary_button, section
 from settings_manager import (
     DEFAULT_THEME, MIN_ACCENT_CONTRAST, MIN_TEXT_CONTRAST, THEME_PRESETS, ThemeColors, clean_api_key,
-    contrast_ratio, mix, normalize_hex, readable_on,
+    contrast_ratio, mix, normalize_hex, readable_on, timezone_choices,
 )
+
+AUTO_ZONE = "(server clock)"      # dropdown key for "no time zone chosen"
 
 HEX_CHARACTERS = ft.InputFilter(regex_string=r"[#0-9a-fA-F]", allow=True)
 MODEL_HINTS = {model_id: hint for model_id, _, hint in MODEL_CHOICES}
@@ -317,13 +319,47 @@ class SettingsView(AppView):
         )
         self._splash = self._switch("Show the splash screen at start-up", current.show_splash)
         self._animations = self._switch("Animations and screen transitions", current.animations)
+        zones = [ft.DropdownOption(key=AUTO_ZONE, text="Server clock (UTC in Docker)")]
+        zones += [ft.DropdownOption(key=name, text=name) for name in timezone_choices()]
+        self._zone = ft.Dropdown(
+            label="Time zone", value=current.timezone or AUTO_ZONE, options=zones, editable=True,
+            enable_filter=True, border=field_border(), on_select=self._zone_changed, expand=True,
+        )
+        self._zone_note = label("", size=12, weight=ft.FontWeight.W_500)
+        self._refresh_zone_note()
         return section(
             "Preferences",
+            ft.Column([label("Time zone", size=13, weight=ft.FontWeight.W_500), self._zone, self._zone_note],
+                      spacing=6),
             ft.Column([label("Calendar weeks start on", size=13, weight=ft.FontWeight.W_500), self._week],
                       spacing=6),
             self._splash,
             self._animations,
         )
+
+    def _refresh_zone_note(self):
+        name = self.service.timezone_name
+        text = "Today is {}".format(self.service.today.strftime("%A %d %B"))
+        if name:
+            text += " in {}.".format(name)
+        else:
+            text += " by the clock of the computer running AegisFit. If that is a server or Docker container " \
+                    "it is probably on UTC, so pick your own time zone to get your own date."
+        self._zone_note.value = text
+
+    def _zone_changed(self, e):
+        chosen = self._zone.value
+        name = "" if chosen in (None, "", AUTO_ZONE) else chosen
+        errors = self.service.save_settings(replace(self.service.settings, timezone=name))
+        if errors:
+            self._zone.value = self.service.settings.timezone or AUTO_ZONE
+            self.app.notify(sentence(errors[0]), error=True)
+        else:
+            self._refresh_zone_note()
+            self._refresh_about()
+            self.app.views[self.app.CALENDAR].show_today()
+            self.app.notify("Time zone saved.")
+        self.app.page.update()
 
     def _switch(self, text, value):
         return ft.Switch(label=text, value=value, active_color=Palette.ON_ACCENT, active_track_color=Palette.ACCENT,
@@ -357,6 +393,8 @@ class SettingsView(AppView):
             self.service.api_key_source(), "none")
         self._about.content = detail_rows([
             ("Version", "{} {}".format(APP_NAME, APP_VERSION)),
+            ("Today", "{} ({})".format(self.service.today.strftime("%a %d %b %Y"),
+                                       self.service.timezone_name or "server clock")),
             ("AI model", self.service.ai_model),
             ("API key", source),
             ("Data file", self.service.data_location),

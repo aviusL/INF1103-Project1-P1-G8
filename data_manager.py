@@ -311,9 +311,9 @@ class DataManager:
         self._history = SessionHistory()  # composition: created and replaced here
 
     @classmethod
-    def from_config(cls, config=None):
+    def from_config(cls, config=None, clock=None):
         config = config or DataConfig.from_env()
-        return cls(JsonFileStorage(config.data_file))
+        return cls(JsonFileStorage(config.data_file), clock=clock or datetime.date.today)
 
     @property
     def location(self):

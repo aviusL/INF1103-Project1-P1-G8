@@ -6,10 +6,12 @@ training data, so "Reset all data" never deletes the API key or the theme.
 Nothing here imports Flet: the colour maths and every validation rule can be unit-tested
 without a GUI, and the console version shares the saved API key.
 """
+import datetime
 import logging
 import os
 import re
 from dataclasses import asdict, dataclass, field, replace
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from ai_manager import DEFAULT_MODEL, MODEL_IDS
 from data_manager import DataConfig, InMemoryStorage, JsonFileStorage, LoadStatus
@@ -24,6 +26,26 @@ MIN_TEXT_CONTRAST = 4.5
 MIN_ACCENT_CONTRAST = 3.0
 
 _HEX = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+# --------------------------------------------------------------------------- #
+# Time zones
+# --------------------------------------------------------------------------- #
+def valid_timezone(name):
+    """True for '' (use the computer's own clock) or an IANA name such as 'Asia/Singapore'."""
+    if not name:
+        return True
+    try:
+        ZoneInfo(str(name))
+        return True
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return False
+
+
+def timezone_choices():
+    """IANA names for the Settings dropdown, e.g. ['Africa/Abidjan', ..., 'UTC']."""
+    names = {name for name in available_timezones() if "/" in name and not name.startswith(("Etc/", "posix", "right"))}
+    return sorted(names | {"UTC"})
 
 
 # --------------------------------------------------------------------------- #
@@ -179,6 +201,7 @@ class AppSettings:
     week_starts_on: str = "monday"
     show_splash: bool = True
     animations: bool = True
+    timezone: str = ""                 # IANA name; empty = the server's own clock (UTC in Docker)
 
     @classmethod
     def from_dict(cls, data, default_model=DEFAULT_MODEL):
@@ -188,6 +211,7 @@ class AppSettings:
         key = clean_api_key(data.get("api_key"))
         model = data.get("model")
         week = str(data.get("week_starts_on") or "").lower()
+        timezone = str(data.get("timezone") or "").strip()
         theme = ThemeColors.from_dict(data.get("theme"))
         if theme.problems():          # e.g. a hand-edited file with unreadable colours
             logger.warning("Stored theme is hard to read (%s); using the default", "; ".join(theme.problems()))
@@ -199,6 +223,7 @@ class AppSettings:
             week_starts_on=week if week in WEEK_STARTS else "monday",
             show_splash=data.get("show_splash") if isinstance(data.get("show_splash"), bool) else True,
             animations=data.get("animations") if isinstance(data.get("animations"), bool) else True,
+            timezone=timezone if valid_timezone(timezone) else "",
         )
 
     def to_dict(self):
@@ -216,6 +241,8 @@ class AppSettings:
             errors.append("choose one of the listed Claude models")
         if self.week_starts_on not in WEEK_STARTS:
             errors.append("the week must start on Monday or Sunday")
+        if not valid_timezone(self.timezone):
+            errors.append("unknown time zone: choose one from the list, like Asia/Singapore")
         if not isinstance(self.show_splash, bool) or not isinstance(self.animations, bool):
             errors.append("switch settings must be on or off")
         return errors + self.theme.problems()
@@ -245,10 +272,12 @@ class PrivateJsonFileStorage(JsonFileStorage):
 class SettingsManager:
     """Loads, validates and saves AppSettings. Depends only on the Storage interface."""
 
-    def __init__(self, storage, environ=None, default_model=DEFAULT_MODEL):
+    def __init__(self, storage, environ=None, default_model=DEFAULT_MODEL, default_timezone="", utcnow=None):
         self._storage = storage           # association: any Storage implementation works
         self._environ = os.environ if environ is None else environ
         self._default_model = default_model
+        self._default_timezone = default_timezone if valid_timezone(default_timezone) else ""
+        self._utcnow = utcnow or (lambda: datetime.datetime.now(datetime.timezone.utc))   # injectable for tests
         self._settings = AppSettings(model=default_model if default_model in MODEL_IDS else DEFAULT_MODEL)
         self._status = LoadStatus.MISSING
 
@@ -258,7 +287,8 @@ class SettingsManager:
         config = config or DataConfig.from_env()
         path = os.environ.get("AEGISFIT_SETTINGS_FILE") or os.path.join(
             os.path.dirname(config.data_file) or ".", "settings.json")
-        return cls(PrivateJsonFileStorage(path), default_model=os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL))
+        return cls(PrivateJsonFileStorage(path), default_model=os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL),
+                   default_timezone=os.environ.get("AEGISFIT_TIMEZONE") or os.environ.get("TZ") or "")
 
     @classmethod
     def in_memory(cls, environ=None):
@@ -306,6 +336,24 @@ class SettingsManager:
         key = clean_api_key(self._environ.get("ANTHROPIC_API_KEY"))
         return api_key_problem(key) if key else None
 
+    # ---- clock ----
+    @property
+    def timezone_name(self):
+        """The zone 'today' is worked out in: the one chosen in Settings, else AEGISFIT_TIMEZONE / TZ,
+        else '' for the computer's own clock."""
+        return self._settings.timezone or self._default_timezone
+
+    def now(self):
+        """The current time as an aware datetime in the chosen zone."""
+        utc = self._utcnow()
+        name = self.timezone_name
+        return utc.astimezone(ZoneInfo(name)) if name else utc.astimezone()
+
+    def today(self):
+        """Today's date where the user is. This is the clock the whole app uses, so a Docker
+        container running on UTC still gives the right day for someone in Singapore."""
+        return self.now().date()
+
     def api_key_source(self):
         """Where the key in use comes from: 'settings', 'environment', or None if there is no key."""
         if self._settings.api_key:
@@ -318,5 +366,5 @@ class SettingsManager:
 __all__ = [
     "AppSettings", "SettingsManager", "PrivateJsonFileStorage", "ThemeColors", "DEFAULT_THEME", "THEME_PRESETS",
     "WEEK_STARTS", "normalize_hex", "mix", "luminance", "contrast_ratio", "readable_on", "clean_api_key",
-    "api_key_problem", "mask_key",
+    "api_key_problem", "mask_key", "valid_timezone", "timezone_choices",
 ]

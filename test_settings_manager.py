@@ -3,6 +3,7 @@ the settings file, CoachService integration and the Claude client's key/model ha
 
 A fake 'anthropic' module stands in for the SDK, so no key or network is needed.
 """
+import datetime
 import json
 import os
 import stat
@@ -11,6 +12,7 @@ import types
 import unittest
 from dataclasses import replace
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 import ai_manager
 from ai_manager import DEFAULT_MODEL, MODEL_IDS, NO_KEY_MESSAGE, AIConfig, AIManager, ClaudeClient, LLMClient
@@ -19,7 +21,8 @@ from data_manager import DataConfig, DataManager, InMemoryStorage, JsonFileStora
 from logic_manager import LogicManager
 from settings_manager import (
     DEFAULT_THEME, THEME_PRESETS, AppSettings, PrivateJsonFileStorage, SettingsManager, ThemeColors,
-    api_key_problem, clean_api_key, contrast_ratio, mask_key, mix, normalize_hex, readable_on,
+    api_key_problem, clean_api_key, contrast_ratio, mask_key, mix, normalize_hex, readable_on, timezone_choices,
+    valid_timezone,
 )
 
 KEY = "sk-ant-api03-" + "x" * 40 + "AbCd"
@@ -209,6 +212,117 @@ class SettingsManagerTests(unittest.TestCase):
             self.assertEqual(manager.location, os.path.join("/app/data", "settings.json"))
         with mock.patch.dict(os.environ, {"AEGISFIT_SETTINGS_FILE": self.path}):
             self.assertEqual(SettingsManager.from_env().location, self.path)
+
+
+# --------------------------------------------------------------------------- #
+# Time zones: "today" must be the user's today, not the server's
+# --------------------------------------------------------------------------- #
+UTC = datetime.timezone.utc
+LATE_EVENING_UTC = datetime.datetime(2026, 11, 18, 18, 30, tzinfo=UTC)    # 02:30 on 19 Nov in Singapore
+EARLY_MORNING_UTC = datetime.datetime(2026, 11, 18, 2, 0, tzinfo=UTC)     # 21:00 on 17 Nov in Los Angeles
+
+
+class TimezoneTests(unittest.TestCase):
+    def manager(self, utcnow, timezone="", default_timezone=""):
+        manager = SettingsManager(InMemoryStorage(), environ={}, default_timezone=default_timezone,
+                                  utcnow=lambda: utcnow)
+        if timezone:
+            self.assertEqual(manager.save(AppSettings(timezone=timezone)), [])
+        return manager
+
+    def test_valid_timezone(self):
+        for name in ("", "UTC", "Asia/Singapore", "America/Los_Angeles"):
+            self.assertTrue(valid_timezone(name), name)
+        for name in ("Mars/Olympus", "singapore", "../etc/passwd", "Asia/"):
+            self.assertFalse(valid_timezone(name), name)
+
+    def test_today_is_the_users_day_east_of_greenwich(self):
+        # 18:30 UTC is already the next morning in Singapore: a UTC server would say the 18th
+        self.assertEqual(self.manager(LATE_EVENING_UTC, "Asia/Singapore").today(), datetime.date(2026, 11, 19))
+        self.assertEqual(self.manager(LATE_EVENING_UTC, "UTC").today(), datetime.date(2026, 11, 18))
+
+    def test_today_is_the_users_day_west_of_greenwich(self):
+        self.assertEqual(self.manager(EARLY_MORNING_UTC, "America/Los_Angeles").today(), datetime.date(2026, 11, 17))
+
+    def test_environment_default_applies_until_settings_choose_a_zone(self):
+        manager = self.manager(LATE_EVENING_UTC, default_timezone="Asia/Singapore")
+        self.assertEqual(manager.timezone_name, "Asia/Singapore")
+        self.assertEqual(manager.today(), datetime.date(2026, 11, 19))
+        manager.save(AppSettings(timezone="UTC"))
+        self.assertEqual(manager.today(), datetime.date(2026, 11, 18))
+
+    def test_invalid_environment_zone_is_ignored(self):
+        self.assertEqual(self.manager(LATE_EVENING_UTC, default_timezone="Nowhere/Land").timezone_name, "")
+
+    def test_unknown_zone_is_not_saved(self):
+        manager = self.manager(LATE_EVENING_UTC)
+        errors = manager.save(AppSettings(timezone="Mars/Olympus"))
+        self.assertEqual(errors, ["unknown time zone: choose one from the list, like Asia/Singapore"])
+        self.assertEqual(manager.settings.timezone, "")
+
+    def test_garbage_zone_in_a_stored_file_falls_back(self):
+        self.assertEqual(AppSettings.from_dict({"timezone": "Mars/Olympus"}).timezone, "")
+        self.assertEqual(AppSettings.from_dict({"timezone": 7}).timezone, "")
+
+    def test_choices_include_common_zones(self):
+        choices = timezone_choices()
+        for name in ("Asia/Singapore", "Europe/London", "America/New_York", "UTC"):
+            self.assertIn(name, choices)
+        self.assertTrue(all(valid_timezone(name) for name in choices))
+
+    def test_whole_app_uses_the_users_day(self):
+        """A session logged at 02:30 Singapore time on the 19th is dated the 19th, even though the
+        server (UTC) is still on the 18th, and 'this week' agrees."""
+        manager = self.manager(LATE_EVENING_UTC, "Asia/Singapore")
+        data = DataManager(InMemoryStorage({"profile": SERVICE_PROFILE, "pending_session": None, "sessions": []}),
+                           clock=manager.today)
+        service = CoachService(data, AIManager(RecordingClient()), LogicManager(), clock=manager.today,
+                               settings=manager)
+        service.load()
+        self.assertEqual(service.today, datetime.date(2026, 11, 19))
+        self.assertEqual(service.timezone_name, "Asia/Singapore")
+        data.set_pending_session(dict(SERVICE_PLAN))
+        self.assertEqual(service.log_session(SERVICE_LOG), [])
+        self.assertEqual(service.history()[0]["date"], "2026-11-19")
+        self.assertEqual(service.accept_session(SERVICE_PLAN), True)
+        self.assertEqual(service.pending_date(), datetime.date(2026, 11, 19))
+
+    def test_scheduled_day_is_stored_exactly_as_chosen(self):
+        """accept_session / reschedule_pending keep the plain date they are given."""
+        manager = self.manager(LATE_EVENING_UTC, "Asia/Singapore")
+        data = DataManager(InMemoryStorage({"profile": SERVICE_PROFILE, "pending_session": None, "sessions": []}),
+                           clock=manager.today)
+        service = CoachService(data, AIManager(RecordingClient()), LogicManager(), clock=manager.today,
+                               settings=manager)
+        service.load()
+        service.accept_session(SERVICE_PLAN, datetime.date(2026, 11, 20))
+        self.assertEqual(service.pending_date(), datetime.date(2026, 11, 20))
+        service.reschedule_pending(datetime.date(2026, 11, 25))
+        self.assertEqual(service.pending_date(), datetime.date(2026, 11, 25))
+        self.assertIn(datetime.date(2026, 11, 25), service.calendar_events(2026, 11))
+
+    def test_create_uses_one_clock_for_service_and_data(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {
+                "FITNESS_DATA_FILE": os.path.join(folder, "d.json"), "FITNESS_LOG_FILE": os.path.join(folder, "a.log"),
+                "AEGISFIT_SETTINGS_FILE": os.path.join(folder, "s.json"), "AEGISFIT_TIMEZONE": "Pacific/Auckland"}):
+            service = CoachService.create()
+        self.assertEqual(service.timezone_name, "Pacific/Auckland")
+        self.assertEqual(service.today, datetime.datetime.now(ZoneInfo("Pacific/Auckland")).date())
+
+
+SERVICE_PROFILE = {
+    "age": 30, "sex": "male", "height_cm": 175, "weight_kg": 70, "fitness_level": "intermediate",
+    "health_concerns": "none", "fitness_goal": "run 5k", "days_per_week": 4, "session_duration_min": 90,
+    "equipment": [], "preferred_activities": ["running"],
+}
+SERVICE_PLAN = {
+    "exercise_type": "easy run", "activity": "running", "duration_min": 30, "intensity": "moderate",
+    "target_hr_bpm": 140, "target_pace_min_per_km": 6.5, "equipment_used": ["bodyweight"],
+    "warmup": "5 min walk", "main_set": "20 min steady", "cooldown": "5 min walk", "rationale": "Base.",
+    "risk_level": "low",
+}
+SERVICE_LOG = {"duration_min": 32, "avg_pace_min_per_km": 6.4, "avg_hr_bpm": 142, "rpe": 6,
+               "pain_reported": False, "comments": ""}
 
 
 # --------------------------------------------------------------------------- #

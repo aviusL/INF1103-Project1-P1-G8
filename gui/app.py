@@ -7,6 +7,7 @@ import flet as ft
 
 from coach_service import APP_NAME, APP_TAGLINE, CoachService, LoadStatus
 from gui.calendar_view import CalendarView
+from gui.dialogs import DayPickerDialog
 from gui.home_view import HomeView
 from gui.profile_view import ProfileView
 from gui.progress_view import ProgressView
@@ -188,25 +189,11 @@ class CoachGUI:
         self.page.update()
 
     def pick_date(self, on_pick, initial=None, first=None, last=None, help_text="Choose a day"):
-        """Open a date picker and call on_pick(date) when the user confirms."""
+        """Open the day picker and call on_pick(date) with the chosen day when the user confirms.
+        Days are plain dates in the user's time zone (see Settings), today by default."""
         today = self.service.today
-        initial = initial or today
-
-        def confirmed(e):
-            value = e.control.value
-            if isinstance(value, datetime.datetime):
-                value = value.date()
-            if value:
-                on_pick(value)
-
-        self.page.show_dialog(ft.DatePicker(
-            value=datetime.datetime.combine(initial, datetime.time()),
-            first_date=datetime.datetime.combine(first or today, datetime.time()),
-            last_date=datetime.datetime.combine(last or today + datetime.timedelta(days=60), datetime.time()),
-            help_text=help_text,
-            on_change=confirmed,
-        ))
-        self.page.update()
+        DayPickerDialog(self, on_pick, initial or today, first or today,
+                        last or today + datetime.timedelta(days=60), help_text).open()
 
 
 def _app_main(page: ft.Page):

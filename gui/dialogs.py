@@ -1,4 +1,6 @@
-"""Pop-up dialogs: log a session, reject a suggestion, confirm, reset, session details."""
+"""Pop-up dialogs: log a session, reject a suggestion, confirm, reset, pick a day, session details."""
+import calendar
+import datetime
 import inspect
 
 import flet as ft
@@ -202,6 +204,92 @@ class ResetDialog(ConfirmDialog):
 
     def _typed(self, e):
         self.delete_button.disabled = (self.confirm_field.value or "").strip() != "RESET"
+
+
+class DayPickerDialog(BaseDialog):
+    """Pick one calendar day between two dates.
+
+    Deliberately not Flet's DatePicker: that control reports the chosen day as a UTC timestamp
+    of local midnight, so for anyone east of Greenwich (Singapore is UTC+8) the server read it
+    as the day before. This dialog works with plain dates only, so no time zone can shift them.
+    """
+
+    def __init__(self, app, on_pick, initial, first, last, help_text="Choose a day"):
+        super().__init__(app)
+        self._on_pick = on_pick
+        self._first, self._last = first, max(first, last)
+        self._help = help_text
+        self.chosen = min(max(initial, self._first), self._last)
+        self._month = self.chosen.replace(day=1)
+        self._body = ft.Column(spacing=8, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+        self._render()
+
+    def title(self):
+        return self._help
+
+    def content(self):
+        return self._body
+
+    def actions(self):
+        return [ft.TextButton("Cancel", on_click=lambda e: self.close()),
+                ft.FilledButton("Select", icon=ft.Icons.CHECK, on_click=self._confirm,
+                                style=ft.ButtonStyle(bgcolor=Palette.ACCENT, color=Palette.ON_ACCENT))]
+
+    # ---- drawing ----
+    def _first_weekday(self):
+        return 6 if self.app.service.settings.week_starts_on == "sunday" else 0
+
+    def _render(self):
+        first_month, last_month = self._first.replace(day=1), self._last.replace(day=1)
+        header = ft.Row([
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous month", disabled=self._month <= first_month,
+                          on_click=lambda e: self._shift(-1)),
+            ft.Container(heading(self._month.strftime("%B %Y"), size=16), expand=True, alignment=ft.Alignment.CENTER),
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next month", disabled=self._month >= last_month,
+                          on_click=lambda e: self._shift(1)),
+        ])
+        names = ("M", "T", "W", "T", "F", "S", "S")
+        start = self._first_weekday()
+        weekdays = ft.Row([ft.Container(label(name, size=11), expand=1, alignment=ft.Alignment.CENTER)
+                           for name in names[start:] + names[:start]])
+        weeks = calendar.Calendar(firstweekday=start).monthdatescalendar(self._month.year, self._month.month)
+        rows = [ft.Row([self._cell(day) for day in week], spacing=4) for week in weeks]
+        self._chosen_text = label(self._describe(), size=12, weight=ft.FontWeight.W_500)
+        self._body.controls = [header, weekdays, *rows, ft.Divider(color=Palette.BORDER), self._chosen_text]
+
+    def _describe(self):
+        return "Selected: " + self.chosen.strftime("%A %d %B %Y")
+
+    def _cell(self, day):
+        if day.month != self._month.month:
+            return ft.Container(expand=1, height=40)          # blank: days of other months are not offered
+        allowed = self._first <= day <= self._last
+        picked = day == self.chosen
+        is_today = day == self.app.service.today
+        return ft.Container(
+            ft.Text(str(day.day), size=13, weight=ft.FontWeight.W_700 if picked else ft.FontWeight.W_500,
+                    color=Palette.ON_ACCENT if picked else (Palette.TEXT if allowed else Palette.BORDER)),
+            expand=1, height=40, border_radius=12, alignment=ft.Alignment.CENTER,
+            bgcolor=Palette.ACCENT if picked else None,
+            border=ft.Border.all(1.5, Palette.ACCENT) if is_today and not picked else None,
+            on_click=(lambda e, d=day: self._choose(d)) if allowed else None,
+        )
+
+    # ---- events ----
+    def _shift(self, months):
+        year, month = self._month.year, self._month.month + months
+        self._month = datetime.date(year + (month - 1) // 12, (month - 1) % 12 + 1, 1)
+        self._render()
+        self.app.page.update()
+
+    def _choose(self, day):
+        self.chosen = day
+        self._render()
+        self.app.page.update()
+
+    def _confirm(self, e):
+        self.close()
+        self._on_pick(self.chosen)
 
 
 class SessionDetailDialog(BaseDialog):

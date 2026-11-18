@@ -211,7 +211,9 @@ class CoachService:
         AppLogger(config.log_file).configure()
         settings = SettingsManager.from_env(config)
         settings.load()          # small file, read before the GUI draws so the theme is right
-        return cls(DataManager.from_config(config), AIManager(), LogicManager(), settings=settings)
+        # One clock for the whole app, in the user's time zone (the server may be on UTC).
+        return cls(DataManager.from_config(config, clock=settings.today), AIManager(), LogicManager(),
+                   clock=settings.today, settings=settings)
 
     # ---- settings ----
     @property
@@ -226,6 +228,11 @@ class CoachService:
     @property
     def settings_location(self):
         return self._settings.location
+
+    @property
+    def timezone_name(self):
+        """Zone used for 'today' ('' means the computer's own clock)."""
+        return self._settings.timezone_name
 
     @property
     def data_location(self):

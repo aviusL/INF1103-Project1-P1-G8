@@ -23,7 +23,7 @@ Many people follow generic workout plans that ignore how their last session actu
 | **Calendar** | Month grid with markers for completed (teal), pain-reported (amber) and planned (blue) sessions; month navigation; *Pain only* and *Hard sessions (RPE 8+)* filters; month stats; tap a day to see its sessions and open the details |
 | **Progress** | Weekly progress report (the Phase 2 feature): sessions, minutes, effort, pain, this week vs last week, a six-week training-load chart, observations, and an on-demand AI coach's note |
 | **Profile** | Edit name, age, sex, height, weight (sliders and toggles), fitness level, days per week, minutes per session, goal, health concerns, equipment (checkboxes) and activities (chips). Live BMI and estimated max heart rate, equipment warnings, undo, and a "Reset all data" danger zone that requires typing RESET |
-| **Settings** | Claude API key (masked, with **Test connection**) and model (Haiku / Sonnet / Opus); colour theme from presets or your own RGB hex codes, with a live preview and contrast check; week start day for the calendar; splash screen and animation switches; app and file locations |
+| **Settings** | Claude API key (masked, with **Test connection**) and model (Haiku / Sonnet / Opus); colour theme from presets or your own RGB hex codes, with a live preview and contrast check; **time zone**; week start day for the calendar; splash screen and animation switches; app and file locations |
 
 The log-session dialog uses sliders for duration, heart rate, effort (RPE) and pace, a pain checkbox and a comments field.
 
@@ -76,6 +76,14 @@ All tests are offline: a stub `LLMClient` (or a fake `anthropic` module) stands 
 
 ---
 
+## Dates and time zones
+
+AegisFit works out "today" in **your** time zone, chosen in **Settings → Preferences → Time zone** (for example `Asia/Singapore`). This matters in Docker, where the container's clock is on UTC: without a time zone, someone in Singapore would see yesterday's date between midnight and 8am, and a session logged then would be filed under the wrong day. You can also set it before the first start with `-e AEGISFIT_TIMEZONE=Asia/Singapore` on `docker run`; a zone saved in Settings takes priority.
+
+Session days are plain dates (`2026-11-20`) with no clock time, so they cannot drift. The day picker used for **Accept** and **Reschedule** is a small calendar dialog built for this app, not Flet's browser date picker: that control reports the chosen day as a UTC timestamp of local midnight, which a server east of Greenwich reads as the *previous* day (the bug this replaced).
+
+---
+
 ## Settings and colours
 
 Settings are saved in `data/settings.json`, separate from your training data, so **Reset all data** keeps your key and theme. A damaged settings file is backed up and replaced with defaults.
@@ -116,11 +124,11 @@ ai_manager   logic_manager   data_manager   (JSON file)
 | --- | --- |
 | `main.py` | Entry point (`--web`, `--cli`) and `ConsoleApp`, the terminal controller |
 | `coach_service.py` | Application layer used by both UIs: suggestion/safety retry loop, scheduling, logging, calendar events, weekly report, settings |
-| `settings_manager.py` | `AppSettings`, `ThemeColors` and presets, colour/contrast maths, API key checks, the settings file |
+| `settings_manager.py` | `AppSettings`, `ThemeColors` and presets, colour/contrast maths, API key checks, time zone and the app clock, the settings file |
 | `gui/app.py` | `CoachGUI`: splash screen, bottom navigation, snackbars, date picker |
 | `gui/base_view.py` | `AppView` abstract base class for the tabs |
 | `gui/home_view.py`, `calendar_view.py`, `progress_view.py`, `profile_view.py`, `settings_view.py` | The five tabs |
-| `gui/dialogs.py` | Log session, reject, confirm, reset and session-detail dialogs |
+| `gui/dialogs.py` | Log session, reject, confirm, reset, day-picker and session-detail dialogs |
 | `gui/widgets.py`, `gui/theme.py` | Shared components, colours and the Montserrat heading font (`gui/assets/fonts`) |
 | `io_manager.py` | Terminal input/output (the only `print()`/`input()`), plus `ReportFormatter` wording shared with the GUI |
 | `ai_manager.py` | The only file that calls Claude; builds prompts and validates the JSON reply |

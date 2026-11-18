@@ -149,6 +149,10 @@ class CalendarView(AppView):
         self.refresh()
 
     def _jump_today(self, e):
+        self.show_today()
+
+    def show_today(self):
+        """Go back to the current month with today selected (also used after a time zone change)."""
         self._month = self.service.today.replace(day=1)
         self._selected = self.service.today
         self.refresh()
