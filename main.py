@@ -1,162 +1,141 @@
-"""main.py - Controller. Wires the four managers together; no console output, no business rules."""
-from ai_manager import AIManager  
-from data_manager import AppLogger, DataConfig, DataManager  
+"""main.py - AegisFit entry point. Starts the Flet GUI by default.
+
+    python main.py          native desktop window (Flet)
+    python main.py --web    serve the GUI in a browser on http://localhost:8550
+    python main.py --cli    the original terminal menu
+
+Inside Docker the FLET_FORCE_WEB_SERVER environment variable makes Flet serve in web mode.
+"""
+import argparse
+
 import io_manager
-from logic_manager import LogicManager
-
-logic = LogicManager()
-ai = AIManager()  
-
-# Get the OUTPUT class from io_manager module
-io___manager_output = io_manager.OutputManager()
-io___manager_input = io_manager.InputManager(io___manager_output)
-
-# GUI related stuff for kivy
-def use_io(output, input_manager):
-    global io___manager_output, io___manager_input
-    io___manager_output = output
-    io___manager_input = input_manager
+from coach_service import APP_NAME, CoachService
 
 
-HISTORY_WINDOW = 5        # how many past sessions are sent to the AI
-MAX_AI_ATTEMPTS = 3       # AI re-tries after the logic layer rejects its output
-MAX_USER_REJECTIONS = 3
+class ConsoleApp:
+    """Terminal front end: turns menu choices into CoachService calls.
 
+    All printing and prompting goes through io_manager; all workflow logic is in CoachService.
+    """
 
-def current_weekly_target(data):  # [data_manager OOP]
-    """Where the next session sits in the user's week (sessions already logged this week)."""
-    history = data.get_recent_sessions(HISTORY_WINDOW)  # [data_manager OOP]
-    done = data.sessions_this_week()  # [data_manager OOP]
-    return logic.weekly_target(data.profile, done, history)  # [data_manager OOP]
+    MAX_USER_REJECTIONS = 3
 
+    def __init__(self, service, output=None, input_manager=None):
+        self._service = service
+        self._out = output or io_manager.OutputManager()
+        self._in = input_manager or io_manager.InputManager(self._out)
+        self._actions = {
+            "setup": self.run_setup,
+            "suggest": self.run_suggestion_flow,
+            "log": self.run_log_session,
+            "history": self.run_history,
+            "reset": self.run_reset,
+        }
 
-def generate_valid_session(data, user_feedback=None, weekly_target=None):  # [data_manager OOP]
-    """AI -> logic loop. Returns (suggestion, decision) or (None, None)."""
-    profile = data.profile  # [data_manager OOP]
-    history = data.get_recent_sessions(HISTORY_WINDOW)  # [data_manager OOP]
-    if weekly_target is None:
-        weekly_target = current_weekly_target(data)  # [data_manager OOP]
-    rule_feedback = None
-    for _ in range(MAX_AI_ATTEMPTS):
-        result = ai.request_session(profile, history, user_feedback, rule_feedback, weekly_target)
-        if not result.ok:
-            io___manager_output.show_error("Coach unavailable: {}. Please try again later.".format(result.error))
-            return None, None
-        decision = logic.evaluate_session(result.data, profile, history, weekly_target)
-        if decision["outcome"] != "reject":
-            return result.data, decision
-        rule_feedback = decision["reasons"]
-        io___manager_output.show_message("The first draft broke safety rules; asking the coach to revise...")
-    io___manager_output.show_error("The coach could not produce a safe session. Please try again.")
-    return None, None
+    def run(self):
+        self._out.show_banner()
+        self._out.show_load_status(self._service.load())
+        try:
+            while True:
+                choice = self._in.prompt_main_menu(self._service.has_profile,
+                                                   self._service.pending_session is not None)
+                if choice == "quit":
+                    break
+                if choice not in ("setup", "reset") and not self._service.has_profile:
+                    self._out.show_error("Please run initial setup first (option 1).")
+                    continue
+                self._actions[choice]()
+        except (KeyboardInterrupt, EOFError):
+            self._out.show_message("")
+        self._out.show_message("Goodbye - keep moving!")
 
-
-def run_setup(data):  # [data_manager OOP]
-    if data.profile and not io___manager_input.prompt_yes_no(  # [data_manager OOP]
-            "A profile already exists. Replace it (history is kept)?"):
-        return False
-    profile = io___manager_input.prompt_profile()
-    while not logic.usable_activities(profile):
-        io___manager_output.show_error("None of your chosen activities can be done with your equipment. "
-                              "Add the needed equipment or pick other activities.")
-        profile["equipment"] = io___manager_input.prompt_equipment()
-        profile["preferred_activities"] = io___manager_input.prompt_activities()
-    for activity in profile["preferred_activities"]:
-        needed = logic.missing_equipment_for(activity, profile)
-        if needed:
-            io___manager_output.show_message("Note: {} needs {}; it will be skipped until you add it.".format(
-                activity, " or ".join(needed)))
-    if not data.save_profile(profile):  # [data_manager OOP]
-        io___manager_output.show_error("Could not save your profile to disk.")
-    return True
-
-
-def run_suggestion_flow(data):  # [data_manager OOP]
-    if data.pending_session:  # [data_manager OOP]
-        io___manager_output.show_message("You already have a planned session:")
-        io___manager_output.show_message(io___manager_output.format_suggestion(data.pending_session))  # [data_manager OOP]
-        if not io___manager_input.prompt_yes_no("Replace it with a new suggestion?"):
+    def run_setup(self):
+        if self._service.has_profile and not self._in.prompt_yes_no(
+                "A profile already exists. Replace it (history is kept)?"):
             return
-    weekly_target = current_weekly_target(data)  # [data_manager OOP]
-    io___manager_output.show_weekly_context(weekly_target)
-    user_feedback = None
-    for _ in range(MAX_USER_REJECTIONS):
-        suggestion, decision = generate_valid_session(data, user_feedback, weekly_target)  # [data_manager OOP]
-        if suggestion is None:
+        profile = self._in.prompt_profile()
+        while self._service.validate_profile(profile):
+            self._out.show_error("None of your chosen activities can be done with your equipment. "
+                                 "Add the needed equipment or pick other activities.")
+            profile["equipment"] = self._in.prompt_equipment()
+            profile["preferred_activities"] = self._in.prompt_activities()
+        for note in self._service.equipment_notes(profile):
+            self._out.show_message("Note: " + note)
+        for error in self._service.save_profile(profile):
+            self._out.show_error(error[0].upper() + error[1:] + ".")
+        self.run_suggestion_flow()
+
+    def run_suggestion_flow(self):
+        pending = self._service.pending_session
+        if pending:
+            self._out.show_message("You already have a planned session:")
+            self._out.show_message(self._out.format_suggestion(pending))
+            if not self._in.prompt_yes_no("Replace it with a new suggestion?"):
+                return
+        target = self._service.weekly_target()
+        self._out.show_weekly_context(target)
+        feedback = None
+        for _ in range(self.MAX_USER_REJECTIONS):
+            result = self._service.suggest_session(
+                feedback, target,
+                on_revision=lambda reasons: self._out.show_message(
+                    "The first draft broke safety rules; asking the coach to revise..."))
+            if not result.ok:
+                self._out.show_error(result.error[0].upper() + result.error[1:] + ". Please try again.")
+                return
+            self._out.show_suggestion(result.suggestion, result.decision)
+            accepted, feedback = self._in.prompt_accept_or_reject()
+            if accepted:
+                if not self._service.accept_session(result.suggestion):
+                    self._out.show_error("Could not save the session to disk.")
+                self._out.show_message("Great - go do it, then log how it went (option 3).")
+                return
+        self._out.show_message("Let's pick this up later - try option 2 again.")
+
+    def run_log_session(self):
+        if not self._service.pending_session:
+            self._out.show_error("There is no planned session to log. Get a suggestion first (option 2).")
             return
-        io___manager_output.show_suggestion(suggestion, decision)
-        accepted, user_feedback = io___manager_input.prompt_accept_or_reject()
-        if accepted:
-            if not data.set_pending_session(suggestion):  # [data_manager OOP]
-                io___manager_output.show_error("Could not save the session to disk.")
-            io___manager_output.show_message("Great - go do it, then log how it went (option 3).")
-            return
-    io___manager_output.show_message("Let's pick this up later - try option 2 again.")
-
-
-def run_log_session(data):  # [data_manager OOP]
-    if not data.pending_session:  # [data_manager OOP]
-        io___manager_output.show_error("There is no planned session to log. Get a suggestion first (option 2).")
-        return
-    while True:
-        log = io___manager_input.prompt_session_log()
-        errors = logic.validate_session_log(log, data.profile)  # [data_manager OOP]
-        if not errors:
-            break
-        for error in errors:
-            io___manager_output.show_error(error)
-        io___manager_output.show_message("Please re-enter your session details.")
-    if not data.complete_pending_session(log):  # [data_manager OOP]
-        io___manager_output.show_error("Could not save the session to disk.")
-        return
-    io___manager_output.show_message("Session saved. Planning your next one...")
-    run_suggestion_flow(data)  # [data_manager OOP]
-
-
-def run_history(data):  # [data_manager OOP]
-    pain_only = io___manager_input.prompt_yes_no("Show only sessions with pain reported?")
-    records = data.filter_sessions(pain_only=pain_only)  # [data_manager OOP]
-    io___manager_output.show_history(records)
-
-
-def run_reset(data):  # [data_manager OOP]
-    if not io___manager_input.prompt_confirm_reset():
-        io___manager_output.show_message("Reset cancelled. Your data is unchanged.")
-        return
-    if data.reset():  # [data_manager OOP]
-        io___manager_output.show_message("All data deleted. Run initial setup (option 1) to start again.")
-    else:
-        io___manager_output.show_error("Could not delete all data files. Check file permissions.")
-
-
-def main():
-    AppLogger(DataConfig.from_env().log_file).configure()  # [data_manager OOP]
-    io___manager_output.show_banner()
-    data = DataManager.from_config()  # [data_manager OOP]
-    status = data.load()  # [data_manager OOP]
-    io___manager_output.show_load_status(status)
-    try:
         while True:
-            choice = io___manager_input.prompt_main_menu(
-                data.profile is not None, data.pending_session is not None)  # [data_manager OOP]
-            if choice == "quit":
+            errors = self._service.log_session(self._in.prompt_session_log())
+            if not errors:
                 break
-            if choice == "setup":
-                if run_setup(data):  # [data_manager OOP]
-                    run_suggestion_flow(data)  # [data_manager OOP]
-            elif choice == "reset":
-                run_reset(data)  # [data_manager OOP]
-            elif data.profile is None:  # [data_manager OOP]
-                io___manager_output.show_error("Please run initial setup first (option 1).")
-            elif choice == "suggest":
-                run_suggestion_flow(data)  # [data_manager OOP]
-            elif choice == "log":
-                run_log_session(data)  # [data_manager OOP]
-            elif choice == "history":
-                run_history(data)  # [data_manager OOP]
-    except (KeyboardInterrupt, EOFError):
-        io___manager_output.show_message("")
-    io___manager_output.show_message("Goodbye - keep moving!")
+            for error in errors:
+                self._out.show_error(error)
+            self._out.show_message("Please re-enter your session details.")
+        self._out.show_message("Session saved. Planning your next one...")
+        self.run_suggestion_flow()
+
+    def run_history(self):
+        pain_only = self._in.prompt_yes_no("Show only sessions with pain reported?")
+        self._out.show_history(self._service.history(pain_only=pain_only))
+
+    def run_reset(self):
+        if not self._in.prompt_confirm_reset():
+            self._out.show_message("Reset cancelled. Your data is unchanged.")
+            return
+        if self._service.reset():
+            self._out.show_message("All data deleted. Run initial setup (option 1) to start again.")
+        else:
+            self._out.show_error("Could not delete all data files. Check file permissions.")
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(prog="aegisfit", description="{}: adaptive training with a safety net".format(APP_NAME))
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--cli", action="store_true", help="use the terminal menu instead of the GUI")
+    mode.add_argument("--web", action="store_true", help="serve the GUI in a web browser")
+    parser.add_argument("--port", type=int, default=8550, help="port for --web (default 8550)")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.cli:
+        ConsoleApp(CoachService.create()).run()
+        return
+    from gui.app import launch   # imported here so the CLI and tests do not need Flet
+    launch(web=args.web, port=args.port)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 """Tests for the Phase 2 new feature: the weekly progress report.
 
-Covers every layer the feature touches (data, logic, AI, IO, controller). A stub LLMClient
-stands in for Claude, so no API key or network is needed.
+Covers every layer the feature touches (data, logic, AI, report wording, CoachService).
+A stub LLMClient stands in for Claude, so no API key or network is needed. The report is
+shown in the GUI's Progress tab; the console menu no longer has a report option.
 """
 import datetime
 import io
@@ -9,13 +10,13 @@ import json
 import unittest
 from contextlib import redirect_stdout
 
-import main
 from ai_manager import (
     AIManager, LLMClient, NonEmptyTextField, PromptBuilder, ResponseSchema,
     SessionPromptBuilder, WeeklyNotePromptBuilder, WeeklyNoteRequest,
 )
 from data_manager import DataManager, InMemoryStorage, SessionRecord, WeekFilter
-from io_manager import InputManager, OutputManager
+from coach_service import CoachService, WeeklyReportResult
+from io_manager import InputManager, OutputManager, ReportFormatter
 from logic_manager import (
     AdherenceInsight, EffortInsight, LogicManager, PainInsight, ProgressInsight,
     ProgressReport, VolumeInsight, WeeklyReporter, WeekSummary,
@@ -240,79 +241,69 @@ class ScriptedInput(InputManager):
         return self._answers.pop(0)
 
 
-class ReportOutputTests(unittest.TestCase):
+class ReportFormatterTests(unittest.TestCase):
     def setUp(self):
         self.report = WeeklyReporter().build(
             PROFILE, [session(MONDAY, minutes=40, rpe=6, pain=True), session(TODAY, minutes=35, rpe=7)],
             [session(LAST_MONDAY, minutes=30, rpe=5)], MONDAY)
 
-    def render(self, *args):
-        return OutputManager().format_progress_report(self.report, *args)
-
-    def test_menu_option_6_opens_the_report_and_7_quits(self):
+    def test_console_menu_has_no_report_option_and_6_quits(self):
         with redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(ScriptedInput('6').prompt_main_menu(True, False), 'report')
-            self.assertEqual(ScriptedInput('8', '7').prompt_main_menu(True, False), 'quit')
-        self.assertIn('6) Weekly progress report', out.getvalue())
-        self.assertIn('Please enter a number from 1 to 7.', out.getvalue())
+            self.assertEqual(ScriptedInput('6').prompt_main_menu(True, False), 'quit')
+            self.assertEqual(ScriptedInput('7', '5').prompt_main_menu(True, False), 'reset')
+        self.assertNotIn('Weekly progress report', out.getvalue())
+        self.assertIn('6) Quit', out.getvalue())
+        self.assertIn('Please enter a number from 1 to 6.', out.getvalue())
 
-    def test_report_table_and_observations(self):
-        text = self.render()
-        self.assertIn('Week of 16 Nov 2026 (compared with 9 Nov 2026)', text)
-        self.assertIn('2 of 3 (67%)', text)
-        self.assertIn('75 of 75 planned', text)
-        self.assertIn('RPE 6.5', text)
-        self.assertIn('Pain reported', text)
-        self.assertIn('2 of 3 planned sessions done', text)
-        self.assertNotIn("Coach's note", text)
+    def test_report_table_rows(self):
+        rows = dict((label, (now, before)) for label, now, before in ReportFormatter.rows(self.report))
+        self.assertEqual(ReportFormatter.heading(self.report), 'Week of 16 Nov 2026 (compared with 9 Nov 2026)')
+        self.assertEqual(rows['Sessions'], ('2 of 3 (67%)', '1 of 3 (33%)'))
+        self.assertEqual(rows['Minutes'][0], '75 of 75 planned')
+        self.assertEqual(rows['Avg effort'], ('RPE 6.5', 'RPE 5'))
+        self.assertEqual(rows['Pain reported'], ('1', 'none'))
+        self.assertIn('2 of 3 planned sessions done', ' '.join(self.report.insights))
 
-    def test_coach_note_is_shown(self):
-        text = self.render(NOTE, None)
-        self.assertIn('Solid week: two runs done.', text)
-        self.assertIn('Add one easy ride.', text)
-
-    def test_note_error_is_shown_instead_of_note(self):
-        self.assertIn("Coach's note unavailable: ANTHROPIC_API_KEY is not set.",
-                      self.render(None, 'ANTHROPIC_API_KEY is not set'))
+    def test_mix_and_amount(self):
+        self.assertEqual(ReportFormatter.mix({'moderate': 2}), 'moderate 2')
+        self.assertEqual(ReportFormatter.mix({}), '-')
+        self.assertEqual(ReportFormatter.amount(30.0), '30')
 
 
 # --------------------------------------------------------------------------- #
-# Controller (main.py): the whole feature end to end
+# CoachService: the whole feature end to end
 # --------------------------------------------------------------------------- #
-class RunProgressReportTests(unittest.TestCase):
-    def setUp(self):
-        original_ai = main.ai
-        original_io = (main.io___manager_output, main.io___manager_input)
-        self.addCleanup(lambda: setattr(main, 'ai', original_ai))
-        self.addCleanup(lambda: main.use_io(*original_io))
-        output = OutputManager()
-        main.use_io(output, InputManager(output))
-
-    def run_report(self, sessions, *replies):
+class ServiceWeeklyReportTests(unittest.TestCase):
+    def run_report(self, sessions, *replies, with_note=True):
         stub = StubClient(*replies)
-        main.ai = AIManager(stub)
         data = DataManager(InMemoryStorage({'profile': PROFILE, 'pending_session': None, 'sessions': sessions}),
                            clock=lambda: TODAY)
-        data.load()
-        with redirect_stdout(io.StringIO()) as out:
-            main.run_progress_report(data)
-        return out.getvalue(), stub
+        service = CoachService(data, AIManager(stub), LogicManager(), clock=lambda: TODAY)
+        service.load()
+        return service.weekly_report(with_coach_note=with_note), stub
 
     def test_report_with_coach_note(self):
-        text, stub = self.run_report([session(TODAY)], (json.dumps(NOTE), None))
+        result, stub = self.run_report([session(TODAY)], (json.dumps(NOTE), None))
+        self.assertIsInstance(result, WeeklyReportResult)
         self.assertEqual(len(stub.prompts), 1)
-        self.assertIn('WEEKLY PROGRESS REPORT', text)
-        self.assertIn('Solid week: two runs done.', text)
+        self.assertEqual(result.coach_note, NOTE)
+        self.assertEqual(result.report.this_week.sessions, 1)
 
-    def test_ai_failure_still_shows_the_report(self):
-        text, _ = self.run_report([session(TODAY)], (None, 'could not connect to the AI service'))
-        self.assertIn('1 of 3 (33%)', text)
-        self.assertIn("Coach's note unavailable: could not connect to the AI service.", text)
+    def test_ai_failure_still_returns_the_report(self):
+        result, _ = self.run_report([session(TODAY)], (None, 'could not connect to the AI service'))
+        self.assertEqual(ReportFormatter.rows(result.report)[0][1], '1 of 3 (33%)')
+        self.assertIsNone(result.coach_note)
+        self.assertEqual(result.note_error, 'could not connect to the AI service')
 
     def test_no_sessions_means_no_ai_call(self):
-        text, stub = self.run_report([])
+        result, stub = self.run_report([])
         self.assertEqual(stub.prompts, [])
-        self.assertIn('No sessions logged this week yet', text)
+        self.assertIn('No sessions logged this week yet', result.report.insights[0])
+
+    def test_note_can_be_skipped(self):
+        result, stub = self.run_report([session(TODAY)], with_note=False)
+        self.assertEqual(stub.prompts, [])
+        self.assertIsNone(result.note_error)
 
 
 if __name__ == '__main__':

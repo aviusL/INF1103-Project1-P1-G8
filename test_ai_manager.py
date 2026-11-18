@@ -168,7 +168,7 @@ class ClaudeClientTests(unittest.TestCase):
         with mock.patch.dict(os.environ):
             os.environ.pop('ANTHROPIC_API_KEY', None)
             self.assertEqual(ClaudeClient(AIConfig()).complete('system', 'user'),
-                             (None, 'ANTHROPIC_API_KEY is not set'))
+                             (None, ai_manager.NO_KEY_MESSAGE))
 
     @unittest.skipIf(ai_manager.anthropic is None, "anthropic package not installed")
     def test_timeout_is_reported(self):

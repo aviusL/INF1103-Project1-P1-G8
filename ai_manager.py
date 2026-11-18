@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 try:
@@ -16,6 +16,30 @@ logger = logging.getLogger("ai_manager")
 INTENSITY_VALUES = ("low", "moderate", "high")
 RISK_VALUES = ("low", "medium", "high")
 
+# Claude models the user can pick in Settings: (model id, short name, description).
+DEFAULT_MODEL = "claude-sonnet-5-5"
+MODEL_CHOICES = (
+    ("claude-haiku-5-5", "Haiku", "Fastest and lowest cost"),
+    ("claude-sonnet-5-5", "Sonnet", "Balanced (default)"),
+    ("claude-opus-5-5", "Opus", "Most capable, slower and pricier"),
+)
+MODEL_IDS = tuple(model_id for model_id, _, _ in MODEL_CHOICES)
+NO_KEY_MESSAGE = "no Claude API key: add one in Settings or set ANTHROPIC_API_KEY"
+
+# What an HTTP error from the API means for the user.
+STATUS_MESSAGES = {
+    400: "the AI service rejected the request (HTTP 400)",
+    401: "the AI service rejected the API key (HTTP 401): check the key in Settings",
+    403: "this API key is not allowed to use the selected model (HTTP 403)",
+    404: "the selected model is not available to this API key (HTTP 404)",
+    429: "the AI service rate limit was reached (HTTP 429): wait a minute and try again",
+    529: "the AI service is overloaded (HTTP 529): try again shortly",
+}
+
+
+def status_message(code):
+    return STATUS_MESSAGES.get(code, "the AI service returned an error (HTTP {})".format(code))
+
 
 # --------------------------------------------------------------------------- #
 # configuration and value objects
@@ -23,7 +47,7 @@ RISK_VALUES = ("low", "medium", "high")
 @dataclass(frozen=True)
 class AIConfig:
     #settings for the AI layer. Immutable, so one config can be shared safely
-    model: str = "claude-sonnet-5-5"
+    model: str = DEFAULT_MODEL
     timeout_seconds: float = 30.0
     max_tokens: int = 1000
     sdk_max_retries: int = 2
@@ -365,21 +389,47 @@ class LLMClient(ABC):
         #Send one request and return (text, error_message).
         pass
 
+    def configure(self, api_key=None, model=None):
+        """Use a new API key and/or model from now on. Clients without either ignore this."""
+
+    def verify(self, api_key=None, model=None):
+        """Check that requests would work, without planning anything. Returns (ok, message).
+        api_key / model, if given, are tried for this check only. Never raises."""
+        return True, "this AI client needs no connection check"
+
 
 class ClaudeClient(LLMClient):
     #LLMClient backed by the Anthropic Messages API.
 
-    def __init__(self, config):
+    VERIFY_TIMEOUT_SECONDS = 15.0
+
+    def __init__(self, config, api_key=None):
         self._config = config
-        self._client = None  # built on the first call, then reused
+        self._api_key = api_key or None   # None: fall back to ANTHROPIC_API_KEY
+        self._client = None               # built on the first call, then reused
+        self._client_key = None           # the key self._client was built with
+
+    @property
+    def model(self):
+        return self._config.model
+
+    def configure(self, api_key=None, model=None):
+        self._api_key = api_key or None
+        if model:
+            self._config = replace(self._config, model=model)
+        self._client = None               # rebuilt with the new key on the next request
+
+    def _key(self, override=None):
+        return override or self._api_key or os.environ.get("ANTHROPIC_API_KEY") or None
 
     def complete(self, system_prompt, user_prompt):
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return None, "ANTHROPIC_API_KEY is not set"
+        key = self._key()
+        if not key:
+            return None, NO_KEY_MESSAGE
         if anthropic is None:
             return None, "the 'anthropic' package is not installed"
         try:
-            response = self._sdk_client().messages.create(
+            response = self._sdk_client(key).messages.create(
                 model=self._config.model,
                 max_tokens=self._config.max_tokens,
                 system=system_prompt,
@@ -394,15 +444,44 @@ class ClaudeClient(LLMClient):
             return None, "could not connect to the AI service"
         except anthropic.APIStatusError as exc:
             logger.error("Claude API status error %s: %s", exc.status_code, exc)
-            return None, "the AI service returned an error (HTTP {})".format(exc.status_code)
+            return None, status_message(exc.status_code)
         except Exception as exc:  # last resort: the app must never crash on an AI failure
             logger.exception("Unexpected AI error: %s", exc)
             return None, "unexpected AI error"
 
-    def _sdk_client(self):
-        if self._client is None:
-            self._client = anthropic.Anthropic(timeout=self._config.timeout_seconds,
+    def verify(self, api_key=None, model=None):
+        """Look up the model with the key: free, and proves both the key and model access."""
+        key = self._key(api_key)
+        model = model or self._config.model
+        if not key:
+            return False, NO_KEY_MESSAGE
+        if anthropic is None:
+            return False, "the 'anthropic' package is not installed"
+        try:
+            client = anthropic.Anthropic(api_key=key, timeout=self.VERIFY_TIMEOUT_SECONDS, max_retries=0)
+            models = getattr(client, "models", None)
+            if models is not None and hasattr(models, "retrieve"):
+                models.retrieve(model)
+            else:  # older SDKs without the Models API: smallest possible request
+                client.messages.create(model=model, max_tokens=1, messages=[{"role": "user", "content": "hi"}])
+            return True, "connected: {} is ready to use".format(model)
+        except anthropic.APITimeoutError:
+            return False, "the AI service timed out"
+        except anthropic.APIConnectionError as exc:
+            logger.error("Connection check failed: %s", exc)
+            return False, "could not connect to the AI service: check your internet connection"
+        except anthropic.APIStatusError as exc:
+            logger.error("Connection check: status %s", exc.status_code)
+            return False, status_message(exc.status_code)
+        except Exception as exc:
+            logger.exception("Unexpected error during connection check: %s", exc)
+            return False, "unexpected error while checking the connection"
+
+    def _sdk_client(self, key):
+        if self._client is None or self._client_key != key:
+            self._client = anthropic.Anthropic(api_key=key, timeout=self._config.timeout_seconds,
                                                max_retries=self._config.sdk_max_retries)
+            self._client_key = key
         return self._client
 
 # --------------------------------------------------------------------------- #
@@ -425,6 +504,20 @@ class AIManager:
         self._session_parser = ResponseParser(ResponseSchema.for_session_plan())
         self._note_prompts = WeeklyNotePromptBuilder()
         self._note_parser = ResponseParser(ResponseSchema.for_weekly_note())
+
+    @property
+    def model(self):
+        return self._config.model
+
+    def configure(self, api_key=None, model=None):
+        """Apply the API key and model chosen in Settings (empty key: use ANTHROPIC_API_KEY)."""
+        if model:
+            self._config = replace(self._config, model=model)
+        self._client.configure(api_key=api_key or None, model=self._config.model)
+
+    def verify_connection(self, api_key=None, model=None):
+        """(ok, message): would a request with this key and model work? Blocking network call."""
+        return self._client.verify(api_key=api_key or None, model=model or self._config.model)
 
     def request_session(self, profile, history, user_feedback=None, rule_feedback=None, weekly_target=None):
         """Ask the model for the next session, re-asking if the reply is malformed."""

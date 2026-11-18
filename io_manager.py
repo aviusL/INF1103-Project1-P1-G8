@@ -1,8 +1,13 @@
-"""io_manager.py - Input layer: every print() and input() in the system lives here."""
+"""io_manager.py - IO layer for the terminal version: every print() and input() lives here.
+
+The graphical IO layer is the gui/ package (Flet). Both talk to coach_service.CoachService.
+"""
 
 import os
 import sys
 import textwrap
+
+from coach_service import ACTIVITY_OPTIONS, APP_NAME, EQUIPMENT_OPTIONS, FITNESS_LEVELS, SEX_OPTIONS
 
 
 class ConsoleFormatter:
@@ -48,15 +53,10 @@ class ConsoleFormatter:
 # ---------- validated input ----------
 class InputManager:
 
-    FITNESS_LEVELS = ("beginner", "intermediate", "advanced")
-    SEX_OPTIONS = ("male", "female")
-    EQUIPMENT_OPTIONS = (
-    "dumbbells", "barbell", "kettlebell", "resistance bands", "pull-up bar", "bench",
-    "treadmill", "stationary bike", "rowing machine", "jump rope", "bicycle", "swimming pool",
-    )
-    ACTIVITY_OPTIONS = (
-    "running", "cycling", "swimming", "walking", "strength training", "hiit", "rowing",
-    )
+    FITNESS_LEVELS = FITNESS_LEVELS
+    SEX_OPTIONS = SEX_OPTIONS
+    EQUIPMENT_OPTIONS = EQUIPMENT_OPTIONS
+    ACTIVITY_OPTIONS = ACTIVITY_OPTIONS
 
 
     def __init__(self, out_put):
@@ -135,15 +135,14 @@ class InputManager:
         self.out_put.show_message("3) Log a completed session" + ("  <- you have a session waiting" if has_pending else ""))
         self.out_put.show_message("4) View history")
         self.out_put.show_message("5) Reset all data")
-        self.out_put.show_message("6) Weekly progress report")
-        self.out_put.show_message("7) Quit")
+        self.out_put.show_message("6) Quit")
         self.out_put.show_message(ConsoleFormatter.LIGHT_RULE)
-        keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "reset", "6": "report", "7": "quit"}
+        keys = {"1": "setup", "2": "suggest", "3": "log", "4": "history", "5": "reset", "6": "quit"}
         while True:
             raw = self._read("Choose an option: ").strip()
             if raw in keys:
                 return keys[raw]
-            self.out_put.show_error("Please enter a number from 1 to 7.")
+            self.out_put.show_error("Please enter a number from 1 to 6.")
     
     
     def prompt_confirm_reset(self):
@@ -239,7 +238,7 @@ class OutputManager:
 
     def show_banner(self):
         self.show_message(ConsoleFormatter.HEAVY_RULE)
-        self.show_message("  " + ConsoleFormatter.bold("AI Fitness Coach"))
+        self.show_message("  " + ConsoleFormatter.bold(APP_NAME))
         self.show_message(ConsoleFormatter.HEAVY_RULE)
 
 
@@ -312,61 +311,48 @@ class OutputManager:
             self.show_message(self.format_session_record(record))
         self.show_message(ConsoleFormatter.LIGHT_RULE)
 
-    # ---------- weekly progress report (Phase 2 new feature) ----------
+
+
+class ReportFormatter:
+    """Plain-text wording for the weekly progress report (Phase 2 new feature).
+
+    No printing: the Flet GUI uses these strings to fill its report table, so the
+    wording is defined once and unit-tested without a GUI.
+    """
+
+    ROW_LABELS = ("Sessions", "Minutes", "Avg effort", "Avg heart rate", "Pain reported")
+
     @staticmethod
-    def _amount(value):
+    def amount(value):
         """30.0 -> '30', 6.5 -> '6.5'."""
         return str(int(value)) if float(value).is_integer() else "{:.1f}".format(value)
 
     @staticmethod
-    def _day(day):
+    def day(day):
         return "{} {}".format(day.day, day.strftime("%b %Y"))
 
     @staticmethod
-    def _mix(counts):
+    def mix(counts):
         return ", ".join("{} {}".format(name, count) for name, count in counts.items()) or "-"
 
-    def _week_column(self, week):
-        """One week's values for the report table, in the same order as the row labels."""
+    @classmethod
+    def week_column(cls, week):
+        """One week's values, in the same order as ROW_LABELS."""
         pct = "" if week.adherence_pct is None else " ({}%)".format(week.adherence_pct)
         return [
             "{} of {}{}".format(week.sessions, week.planned_sessions, pct),
-            "{} of {} planned".format(self._amount(week.minutes), self._amount(week.planned_minutes)),
-            "-" if week.avg_rpe is None else "RPE {}".format(self._amount(week.avg_rpe)),
+            "{} of {} planned".format(cls.amount(week.minutes), cls.amount(week.planned_minutes)),
+            "-" if week.avg_rpe is None else "RPE {}".format(cls.amount(week.avg_rpe)),
             "-" if week.avg_hr is None else "{} bpm".format(round(week.avg_hr)),
             str(week.pain_sessions) if week.pain_sessions else "none",
         ]
 
-    def format_progress_report(self, report, coach_note=None, note_error=None):
-        this, last = report.this_week, report.last_week
-        table = "{:<16}{:<20}{}"
-        lines = [
-            ConsoleFormatter.section_title("Weekly progress report"),
-            "Week of {} (compared with {})".format(self._day(this.week_start), self._day(last.week_start)),
-            "",
-            table.format("", "This week", "Last week"),
-        ]
-        labels = ("Sessions", "Minutes", "Avg effort", "Avg heart rate", "Pain reported")
-        for label, now, before in zip(labels, self._week_column(this), self._week_column(last)):
-            lines.append(table.format(label, now, before))
-        lines += ["",
-                  ConsoleFormatter.labelled("Intensity", self._mix(this.intensity_counts)),
-                  ConsoleFormatter.labelled("Activity", self._mix(this.activity_counts))]
-        if report.insights:
-            lines += ["", ConsoleFormatter.bold("Observations")]
-            lines += [textwrap.fill(text, width=ConsoleFormatter.LINE_WIDTH, initial_indent="  - ",
-                                    subsequent_indent="    ") for text in report.insights]
-        if coach_note:
-            lines += ["", ConsoleFormatter.bold("Coach's note"),
-                      ConsoleFormatter.labelled("Summary", coach_note["summary"]),
-                      ConsoleFormatter.labelled("Next week", coach_note["focus_next_week"])]
-        elif note_error:
-            lines += ["", "Coach's note unavailable: {}.".format(note_error)]
-        lines.append(ConsoleFormatter.LIGHT_RULE)
-        return "\n".join(lines)
+    @classmethod
+    def heading(cls, report):
+        return "Week of {} (compared with {})".format(cls.day(report.this_week.week_start),
+                                                      cls.day(report.last_week.week_start))
 
-    def show_progress_report(self, report, coach_note=None, note_error=None):
-        self.show_message(self.format_progress_report(report, coach_note, note_error))
-#Create shared INSTANCES
-out_put = OutputManager()
-in_put = InputManager(out_put)
+    @classmethod
+    def rows(cls, report):
+        """[(label, this week, last week), ...] for the comparison table."""
+        return list(zip(cls.ROW_LABELS, cls.week_column(report.this_week), cls.week_column(report.last_week)))

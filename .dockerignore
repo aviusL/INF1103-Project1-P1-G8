@@ -1,4 +1,9 @@
+.git
+.venv/
+.vs/
+.vscode/
+__pycache__/
 data/
 .env
-__pycache__/
-.git
+*.corrupt-*
+*.docx

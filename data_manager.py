@@ -315,6 +315,11 @@ class DataManager:
         config = config or DataConfig.from_env()
         return cls(JsonFileStorage(config.data_file))
 
+    @property
+    def location(self):
+        """Where the data is stored (a file path, or a description for in-memory storage)."""
+        return getattr(self._storage, "path", "in memory (not saved to disk)")
+
     # ---- read-only views (copies, so callers cannot corrupt internal state) ----
     @property
     def profile(self):

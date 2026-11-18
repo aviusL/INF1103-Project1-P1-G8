@@ -206,11 +206,14 @@ class LogicManagerTests(unittest.TestCase):
 
 
 class MainIntegrationTests(unittest.TestCase):
-    def test_main_uses_oop_logic(self):
+    def test_main_wires_the_service_into_the_console_app(self):
         import main
-        self.assertIsInstance(main.logic, LogicManager)
-        target = main.logic.weekly_target(PROFILE, 0, [])
-        self.assertEqual(target['session_number'], 1)
+        from coach_service import CoachService
+        service = CoachService(data_manager.DataManager(data_manager.InMemoryStorage()), None, LogicManager())
+        app = main.ConsoleApp(service)
+        self.assertIs(app._service, service)
+        self.assertTrue(main.parse_args(['--cli']).cli)
+        self.assertFalse(main.parse_args([]).web)
 
 
 if __name__ == '__main__':
