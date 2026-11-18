@@ -5,6 +5,7 @@ A fake 'anthropic' module stands in for the SDK, so no key or network is needed.
 """
 import datetime
 import json
+import logging
 import os
 import stat
 import tempfile
@@ -302,10 +303,20 @@ class TimezoneTests(unittest.TestCase):
         self.assertIn(datetime.date(2026, 11, 25), service.calendar_events(2026, 11))
 
     def test_create_uses_one_clock_for_service_and_data(self):
+        root = logging.getLogger()
+        handlers_before = list(root.handlers)
         with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {
                 "FITNESS_DATA_FILE": os.path.join(folder, "d.json"), "FITNESS_LOG_FILE": os.path.join(folder, "a.log"),
                 "AEGISFIT_SETTINGS_FILE": os.path.join(folder, "s.json"), "AEGISFIT_TIMEZONE": "Pacific/Auckland"}):
-            service = CoachService.create()
+            try:
+                service = CoachService.create()
+            finally:
+                # create() opens a.log for logging. Windows cannot delete an open file, so close
+                # it before the temporary folder is removed (and leave logging as it was).
+                for handler in root.handlers[:]:
+                    if handler not in handlers_before:
+                        root.removeHandler(handler)
+                        handler.close()
         self.assertEqual(service.timezone_name, "Pacific/Auckland")
         self.assertEqual(service.today, datetime.datetime.now(ZoneInfo("Pacific/Auckland")).date())
 
