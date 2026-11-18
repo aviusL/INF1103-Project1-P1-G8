@@ -127,51 +127,109 @@ def secondary_button(text, icon=None, on_click=None, expand=False):
 
 
 class LabeledSlider:
-    """A slider with its title and live value, e.g. 'Weight   72.5 kg'."""
+    """A slider with its title and an editable value, e.g. 'Weight   [72.5] kg'.
+
+    Drag the slider, or type a number into the box and press Enter (or click elsewhere).
+    Typed numbers are snapped to the slider's step and clamped to its range, so the value is
+    always one the slider could have produced. Anything that is not a number is undone.
+    """
 
     def __init__(self, title, low, high, value, step=1, unit="", on_change=None, describe=None):
+        self._low, self._high = low, high
         self._unit = unit
         self._step = step
+        self._decimals = 0 if float(step).is_integer() else len(repr(float(step)).split(".")[1])
         self._describe = describe
         self._on_change = on_change
-        self._value_text = ft.Text(weight=ft.FontWeight.W_700, color=Palette.TEXT)
+        self._typed = None              # text typed into the box but not applied yet
         self.slider = ft.Slider(
-            min=low, max=high, value=self._clamp(value, low, high),
+            min=low, max=high, value=self._snap(value),
             divisions=max(1, int(round((high - low) / step))),
             active_color=Palette.ACCENT, inactive_color=Palette.BORDER,
             on_change=self._changed,
         )
+        digits = len(str(int(high))) + (self._decimals + 1 if self._decimals else 0)
+        self.field = ft.TextField(
+            width=28 + 10 * digits, dense=True, text_align=ft.TextAlign.RIGHT, text_size=14,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(regex_string=r"^[0-9]*([.,][0-9]*)?$", allow=True),
+            content_padding=ft.Padding.symmetric(horizontal=8, vertical=6),
+            border=field_border(), border_color=Palette.BORDER, focused_border_color=Palette.ACCENT,
+            text_style=ft.TextStyle(weight=ft.FontWeight.W_700, color=Palette.TEXT),
+            tooltip="Type a value from {} to {}".format(self._format(low), self._format(high)),
+            on_change=self._typing, on_submit=self._commit, on_blur=self._commit,
+        )
+        self._unit_text = ft.Text(unit, weight=ft.FontWeight.W_700, color=Palette.TEXT, visible=bool(unit))
+        self._describe_text = ft.Text(color=Palette.MUTED, size=13, visible=describe is not None)
         self._refresh_text()
+        title_text = label(title, size=13, color=Palette.MUTED, weight=ft.FontWeight.W_500)
+        title_text.expand = True
         self.control = ft.Column([
-            ft.Row([label(title, size=13, color=Palette.MUTED, weight=ft.FontWeight.W_500), self._value_text],
-                   alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Row([title_text,
+                    ft.Row([self.field, self._unit_text, self._describe_text], spacing=6, tight=True)],
+                   alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.slider,
-        ], spacing=0)
+        ], spacing=2)
 
-    @staticmethod
-    def _clamp(value, low, high):
+    def _snap(self, value):
+        """value on the slider's step grid and inside its range (the low end if not a number)."""
         try:
-            return min(max(float(value), low), high)
+            number = float(value)
         except (TypeError, ValueError):
-            return low
+            return self._low
+        if number != number:            # NaN
+            return self._low
+        number = round(number / self._step) * self._step
+        return min(max(number, self._low), self._high)
+
+    def _format(self, number):
+        return "{:.{}f}".format(number, self._decimals) if self._decimals else str(int(round(number)))
 
     @property
     def value(self):
+        self._apply_typed(notify=False)     # a number typed just before pressing Save still counts
         raw = round(self.slider.value / self._step) * self._step
-        return int(raw) if float(self._step).is_integer() else round(raw, 1)
+        return int(raw) if float(self._step).is_integer() else round(raw, self._decimals)
 
     @value.setter
     def value(self, new_value):
-        self.slider.value = self._clamp(new_value, self.slider.min, self.slider.max)
+        self._typed = None
+        self.slider.value = self._snap(new_value)
         self._refresh_text()
 
     def _refresh_text(self):
-        text = "{} {}".format(self.value, self._unit).strip()
+        current = self.value
+        self.field.value = self._format(current)
         if self._describe:
-            text += "  ·  " + self._describe(self.value)
-        self._value_text.value = text
+            self._describe_text.value = "·  " + self._describe(current)
+
+    def _typing(self, e):
+        self._typed = self.field.value
+
+    def _apply_typed(self, notify):
+        if self._typed is None:
+            return
+        text, self._typed = self._typed.strip().replace(",", "."), None
+        try:
+            if not text or text == ".":
+                raise ValueError(text)
+            self.slider.value = self._snap(float(text))
+        except ValueError:
+            pass                            # not a number: show the previous value again
+        self._refresh_text()
+        if notify and self._on_change:
+            self._on_change(self.value)
+
+    def _commit(self, e=None):
+        """Enter pressed or the box lost focus: apply what was typed."""
+        if self._typed is None:
+            self._refresh_text()            # e.g. '72.50' typed then undone: tidy the display
+            return
+        self._apply_typed(notify=True)
 
     def _changed(self, e):
+        self._typed = None
         self._refresh_text()
         if self._on_change:
             self._on_change(self.value)

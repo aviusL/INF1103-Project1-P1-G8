@@ -97,7 +97,8 @@ class ConsoleApp:
             self._out.show_error("There is no planned session to log. Get a suggestion first (option 2).")
             return
         while True:
-            errors = self._service.log_session(self._in.prompt_session_log())
+            measure_speed = self._service.logs_speed(self._service.pending_session)
+            errors = self._service.log_session(self._in.prompt_session_log(measure_speed))
             if not errors:
                 break
             for error in errors:

@@ -212,11 +212,18 @@ class InputManager:
         return False, self.prompt_required_text("Why are you rejecting it? (the coach will adapt)")
     
     
-    def prompt_session_log(self):
+    def prompt_session_log(self, measure_speed=False):
+        """measure_speed: ask for average speed in km/h (cycling) instead of pace in min/km."""
         self.out_put.show_message(ConsoleFormatter.section_title("Log your session"))
+        duration = self.prompt_int("Actual duration in minutes", 1, 300)
+        if measure_speed:
+            pace, speed = None, self.prompt_float("Average speed in km/h", 5, 60, allow_blank=True)
+        else:
+            pace, speed = self.prompt_float("Average pace in min/km", 2, 30, allow_blank=True), None
         return {
-            "duration_min": self.prompt_int("Actual duration in minutes", 1, 300),
-            "avg_pace_min_per_km": self.prompt_float("Average pace in min/km", 2, 30, allow_blank=True),
+            "duration_min": duration,
+            "avg_pace_min_per_km": pace,
+            "avg_speed_kmh": speed,
             "avg_hr_bpm": self.prompt_int("Average heart rate (bpm)", 30, 230),
             "rpe": self.prompt_int("Rate of perceived exertion", 1, 10),
             "pain_reported": self.prompt_yes_no("Any pain or discomfort?"),
@@ -290,7 +297,12 @@ class OutputManager:
 
     def format_session_record(self, record):
         actual = record["actual"]
-        pace = "n/a" if actual.get("avg_pace_min_per_km") is None else "{} min/km".format(actual["avg_pace_min_per_km"])
+        if actual.get("avg_speed_kmh") is not None:
+            pace = "{} km/h".format(actual["avg_speed_kmh"])
+        elif actual.get("avg_pace_min_per_km") is not None:
+            pace = "{} min/km".format(actual["avg_pace_min_per_km"])
+        else:
+            pace = "n/a"
         pain = "pain reported" if actual.get("pain_reported") else "no pain"
         return "\n".join([
             "#{}  {}  {}".format(record["id"], record["date"], record["planned"]["exercise_type"]),

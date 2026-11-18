@@ -19,7 +19,7 @@ Many people follow generic workout plans that ignore how their last session actu
 | Screen | What you can do |
 | --- | --- |
 | **Splash** | Animated start screen while your saved data loads in the background |
-| **Home** | This week's progress ring and intensity plan, "Plan my next session", the AI suggestion card (safety score, warnings, warm-up / main set / cool-down), **Accept** (pick the day in a date picker) or **Not for me** (quick-reason chips + free text sent back to the AI), the up-next session with Log / Reschedule / Discard, recent activity |
+| **Home** | This week's progress ring and intensity plan, "Plan my next session", the AI suggestion card (safety score, warnings, warm-up / main set / cool-down), **Accept** (pick the day in a date picker) or **Not for me** (quick-reason chips + free text sent back to the AI), the up-next session with Log / Reschedule / Discard (rides are logged as average speed, 5-60 km/h; runs and walks as pace in min/km), recent activity |
 | **Calendar** | Month grid with markers for completed (teal), pain-reported (amber), planned (blue) and imported Strava (violet) sessions; month navigation; *Pain only* and *Hard sessions (RPE 8+)* filters; month stats; tap a session for its details, an instant **plan vs actual** comparison and **Get coach feedback** |
 | **Progress** | Weekly progress report (the Phase 2 feature): sessions, minutes, effort, pain, this week vs last week, a six-week training-load chart, observations, and an on-demand AI coach's note |
 | **Profile** | Edit name, age, sex, height, weight (sliders and toggles), fitness level, days per week, minutes per session, goal, health concerns, equipment (checkboxes) and activities (chips). Live BMI and estimated max heart rate, equipment warnings, undo, **Training history** (upload your Strava `activities.csv`, with a **?** that explains where to find it), and a "Reset all data" danger zone that requires typing RESET |
@@ -81,6 +81,14 @@ All tests are offline: a stub `LLMClient` (or a fake `anthropic` module) stands 
 AegisFit works out "today" in **your** time zone, chosen in **Settings → Preferences → Time zone** (for example `Asia/Singapore`). This matters in Docker, where the container's clock is on UTC: without a time zone, someone in Singapore would see yesterday's date between midnight and 8am, and a session logged then would be filed under the wrong day. You can also set it before the first start with `-e AEGISFIT_TIMEZONE=Asia/Singapore` on `docker run`; a zone saved in Settings takes priority.
 
 Session days are plain dates (`2026-11-20`) with no clock time, so they cannot drift. The day picker used for **Accept** and **Reschedule** is a small calendar dialog built for this app, not Flet's browser date picker: that control reports the chosen day as a UTC timestamp of local midnight, which a server east of Greenwich reads as the *previous* day (the bug this replaced).
+
+---
+
+## Sliders, pace and speed
+
+Rides are logged as **average speed** (5-60 km/h); runs and walks as **pace** (min/km). `uses_speed()` in `logic_manager.py` decides, so the GUI, the terminal menu and the plan-vs-actual review always agree.
+
+**Typing values.** Every slider (Profile and *How did it go?*) has a small box showing its value: drag the slider, or type a number and press Enter. Typed numbers snap to the slider's step and are clamped to its range (typing 75 km/h gives 60), and anything that isn't a number puts the previous value back. A number typed just before pressing *Save* still counts.
 
 ---
 
@@ -147,7 +155,7 @@ ai_manager   logic_manager   data_manager   (JSON file)
 | `gui/widgets.py`, `gui/theme.py` | Shared components, colours and the Montserrat heading font (`gui/assets/fonts`) |
 | `io_manager.py` | Terminal input/output (the only `print()`/`input()`), plus `ReportFormatter` wording shared with the GUI |
 | `ai_manager.py` | The only file that calls Claude; builds prompts and validates the JSON reply |
-| `logic_manager.py` | Safety rules, weekly planning, the weekly progress report and the plan-vs-actual session review |
+| `logic_manager.py` | Safety rules, weekly planning, the weekly progress report, the plan-vs-actual session review, and which activities are measured in km/h (`uses_speed`) |
 | `data_manager.py` | JSON persistence, history queries and filters, imported activities (`ImportedActivity`, `ActivityLog`) and saved coach feedback |
 | `activity_import.py` | `ActivityImporter` interface and `StravaCsvImporter` (reads Strava's `activities.csv`, UTC to local days) |
 | `test_*.py` | Offline unit tests |

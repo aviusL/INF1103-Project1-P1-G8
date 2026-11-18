@@ -327,8 +327,8 @@ class SessionPromptBuilder(PromptBuilder):
 
     _SYSTEM_PROMPT = """You are an exercise-planning assistant inside a fitness coaching app.
 You receive a JSON payload with the user's profile (including sex, equipment, days_per_week
-and session_duration_min), their recent session history (planned vs actual: pace, heart rate,
-RPE, pain/discomfort, comments), the weekly_plan_target for this session, and optionally
+and session_duration_min), their recent session history (planned vs actual: pace in min/km, or
+avg_speed_kmh for cycling, heart rate, RPE, pain/discomfort, comments), the weekly_plan_target for this session, and optionally
 a reason the user rejected a previous suggestion and/or safety-rule violations to fix.
 
 Design the user's NEXT single exercise session. Adapt to how recent sessions actually went:
@@ -409,7 +409,7 @@ You receive a JSON payload with the user's profile, the session and an app_revie
 
 If session.planned is present, the session was planned by the app and then logged by the user: compare
 what was planned (duration, intensity, target heart rate, target pace, main set) with what was actually
-done (duration, average heart rate, pace, RPE, pain, the user's comments). app_review.adherence and
+done (duration, average heart rate, pace, or average speed in km/h for cycling, RPE, pain, the user's comments). app_review.adherence and
 app_review.checks already state how each number compared with the plan; use them and do not contradict them.
 If session.source is present instead, it is past training imported from another app with no plan:
 review it on its own against the user's goal and level.

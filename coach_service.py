@@ -16,7 +16,7 @@ from typing import Callable, Optional
 from activity_import import IMPORTERS
 from ai_manager import AIManager
 from data_manager import AppLogger, DataConfig, DataManager, LoadStatus
-from logic_manager import LogicManager, ProgressReport, pace_text
+from logic_manager import LogicManager, ProgressReport, pace_text, speed_from_pace, uses_speed
 from settings_manager import AppSettings, SettingsManager, api_key_problem, clean_api_key
 
 logger = logging.getLogger("coach_service")
@@ -50,9 +50,14 @@ ACTIVITY_OPTIONS = (
 LOG_LIMITS = {
     "duration_min": (1, 300),
     "avg_pace_min_per_km": (2, 30),
+    "avg_speed_kmh": (5, 60),           # cycling is logged as speed instead of pace
     "avg_hr_bpm": (30, 230),
     "rpe": (1, 10),
 }
+
+
+OPTIONAL_LOG_FIELDS = ("avg_pace_min_per_km", "avg_speed_kmh")
+DEFAULT_SPEED_KMH = 25
 
 
 def _number(value):
@@ -253,12 +258,17 @@ class CompletedSession(CalendarEvent):
 
     def details(self):
         pace = self.actual.get("avg_pace_min_per_km")
+        speed = self.actual.get("avg_speed_kmh")
+        if speed is not None or uses_speed(self.activity):
+            pace_row = ("Speed", "-" if speed is None else "{:g} km/h".format(speed))
+        else:
+            pace_row = ("Pace", "-" if pace is None else pace_text(pace))
         return [
             ("Activity", self.activity or "-"),
             ("Planned", "{} min, {} intensity".format(self.plan.get("duration_min", "?"),
                                                     self.plan.get("intensity", "?"))),
             ("Done", "{} min".format(self.actual.get("duration_min", "?"))),
-            ("Pace", "-" if pace is None else pace_text(pace)),
+            pace_row,
             ("Heart rate", "{} bpm".format(self.actual.get("avg_hr_bpm", "-"))),
             ("Effort", "RPE {}".format(self.actual.get("rpe", "-"))),
             ("Pain", "yes" if self.actual.get("pain_reported") else "no"),
@@ -341,7 +351,8 @@ class ImportedSession(CalendarEvent):
 
     def comparison_inputs(self):
         return None, {"duration_min": self._get("duration_min"), "avg_hr_bpm": self._get("avg_hr_bpm"),
-                      "avg_pace_min_per_km": self._get("avg_pace_min_per_km"), "rpe": self.effort}
+                      "avg_pace_min_per_km": self._get("avg_pace_min_per_km"),
+                      "avg_speed_kmh": self._get("avg_speed_kmh"), "rpe": self.effort}
 
     def as_payload(self):
         stats = {key: self._session[key] for key in self._STAT_FIELDS if key in self._session}
@@ -589,13 +600,26 @@ class CoachService:
         errors = []
         for name, (low, high) in LOG_LIMITS.items():
             value = log.get(name)
-            if value is None and name == "avg_pace_min_per_km":
+            if value is None and name in OPTIONAL_LOG_FIELDS:
                 continue
             if not isinstance(value, (int, float)) or isinstance(value, bool) or not low <= value <= high:
                 errors.append("{} must be between {} and {}".format(name.replace("_", " "), low, high))
         if errors:
             return errors
         return self._logic.validate_session_log(log, self._data.profile)
+
+    @staticmethod
+    def logs_speed(plan):
+        """Whether a session of this plan is logged as average speed (km/h, cycling) or pace (min/km)."""
+        return uses_speed((plan or {}).get("activity"))
+
+    @staticmethod
+    def suggested_speed(plan):
+        """Starting value for the speed slider: the plan's target (if the AI gave one) or 25 km/h."""
+        plan = plan or {}
+        speed = plan.get("target_speed_kmh") or speed_from_pace(plan.get("target_pace_min_per_km"))
+        low, high = LOG_LIMITS["avg_speed_kmh"]
+        return min(max(speed, low), high) if speed else DEFAULT_SPEED_KMH
 
     def log_session(self, log):
         """Validate and record the pending session as done. Returns a list of errors."""
@@ -741,5 +765,5 @@ class CoachService:
 __all__ = [
     "APP_NAME", "APP_VERSION", "APP_TAGLINE", "CoachService", "SuggestionResult", "WeeklyReportResult", "CalendarEvent", "CompletedSession",
     "PlannedSession", "ImportedSession", "ImportSummary", "FeedbackResult", "LoadStatus", "PROFILE_LIMITS", "FITNESS_LEVELS", "SEX_OPTIONS",
-    "EQUIPMENT_OPTIONS", "ACTIVITY_OPTIONS", "LOG_LIMITS",
+    "EQUIPMENT_OPTIONS", "ACTIVITY_OPTIONS", "LOG_LIMITS", "OPTIONAL_LOG_FIELDS",
 ]

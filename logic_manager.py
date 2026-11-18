@@ -15,6 +15,18 @@ MAX_DURATION_MIN = 120
 BEGINNER_MAX_DURATION_MIN = 60
 MIN_PACE = 3.0
 MAX_PACE = 15.0
+SPEED_ACTIVITIES = ('cycling',)   # logged as average speed (km/h) instead of pace (min/km)
+MIN_SPEED_KMH, MAX_SPEED_KMH = 5, 60
+
+
+def uses_speed(activity):
+    """True if this activity is measured in km/h (cycling) rather than min/km."""
+    return str(activity or '').strip().lower() in SPEED_ACTIVITIES
+
+
+def speed_from_pace(minutes_per_km):
+    """6.0 min/km -> 10.0 km/h."""
+    return round(60 / minutes_per_km, 1) if minutes_per_km else None
 PROGRESSION_LIMIT = 1.30
 HIGH_RPE = 8
 NO_CONCERN_WORDS = ('', 'none', 'no', 'nil', 'n/a', 'na')
@@ -280,6 +292,9 @@ class SessionLogValidator:
         pace = log.get('avg_pace_min_per_km')
         if pace is not None and pace < MIN_PACE:
             errors.append(f'an average pace of {pace} min/km is not realistic')
+        speed = log.get('avg_speed_kmh')
+        if speed is not None and not MIN_SPEED_KMH <= speed <= MAX_SPEED_KMH:
+            errors.append(f'an average speed of {speed} km/h is not realistic (expected {MIN_SPEED_KMH}-{MAX_SPEED_KMH})')
         if log['avg_hr_bpm'] > max_hr + 10:
             errors.append(f"average heart rate {log['avg_hr_bpm']} bpm is far above your estimated max ({max_hr})")
         return errors
@@ -557,6 +572,27 @@ class PaceCheck(ReviewCheckRule):
         return ReviewCheck('Pace', pace_text(target), pace_text(done), direction, note)
 
 
+class SpeedCheck(ReviewCheckRule):
+    """Cycling: average speed. Plans give no target speed, but if the AI set a target pace for a
+    ride it is converted (60 / pace) so the two can still be compared."""
+
+    TOLERANCE = 0.05     # within 5% of the target speed counts as on plan
+
+    def check(self, planned, actual, max_hr):
+        done = _number(actual.get('avg_speed_kmh'))
+        if done is None:
+            return None
+        target = _number((planned or {}).get('target_speed_kmh'))
+        if target is None:
+            target = speed_from_pace(_number((planned or {}).get('target_pace_min_per_km')))
+        if not target:
+            return ReviewCheck('Speed', None, f'{done:g} km/h', None, 'average speed')
+        direction = _direction(done, target, max(1.0, target * self.TOLERANCE))
+        diff = round(abs(done - target), 1)
+        note = 'on target speed' if direction == 'on' else f'{diff:g} km/h {"faster" if direction == "over" else "slower"} than target'
+        return ReviewCheck('Speed', f'{target:g} km/h', f'{done:g} km/h', direction, note)
+
+
 class EffortCheck(ReviewCheckRule):
     def check(self, planned, actual, max_hr):
         rpe = _number(actual.get('rpe'))
@@ -579,7 +615,7 @@ class SessionReviewer:
 
     def __init__(self, checks=None):
         self._checks = list(checks) if checks is not None else [
-            DurationCheck(), HeartRateCheck(), PaceCheck(), EffortCheck(),
+            DurationCheck(), HeartRateCheck(), PaceCheck(), SpeedCheck(), EffortCheck(),
         ]
         if not all(isinstance(check, ReviewCheckRule) for check in self._checks):
             raise TypeError('all review checks must implement ReviewCheckRule')

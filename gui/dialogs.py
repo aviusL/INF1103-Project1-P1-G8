@@ -8,6 +8,7 @@ import inspect
 import flet as ft
 
 from activity_import import STRAVA_HELP_URL
+from coach_service import LOG_LIMITS
 from gui.theme import STATUS_COLORS, STATUS_LABELS, Palette
 from gui.widgets import LabeledSlider, activity_badge, detail_rows, field_border, heading, label, pill
 
@@ -69,13 +70,21 @@ class LogSessionDialog(BaseDialog):
         self.duration = LabeledSlider("Duration", 5, 180, plan.get("duration_min", 30), unit="min")
         self.heart_rate = LabeledSlider("Average heart rate", 60, 210, plan.get("target_hr_bpm", 130), unit="bpm")
         self.rpe = LabeledSlider("Effort (RPE)", 1, 10, 5, describe=lambda v: RPE_WORDS.get(v, ""))
-        has_pace = plan.get("target_pace_min_per_km") is not None
-        self.track_pace = ft.Switch(label="I tracked my pace", value=has_pace, active_color=Palette.ON_ACCENT,
-                                    active_track_color=Palette.ACCENT,
-                                    on_change=self._pace_toggled)
-        self.pace = LabeledSlider("Average pace", 3.0, 15.0, plan.get("target_pace_min_per_km") or 6.0,
-                                  step=0.1, unit="min/km")
-        self.pace.control.visible = has_pace
+        # Rides are measured in km/h, runs and walks in min/km (CoachService.logs_speed decides).
+        self._speed_mode = self.app.service.logs_speed(plan)
+        low, high = LOG_LIMITS["avg_speed_kmh"]
+        if self._speed_mode:
+            tracked = True                 # bike computers and watches almost always record speed
+            self.pace = LabeledSlider("Average speed", low, high, self.app.service.suggested_speed(plan),
+                                      step=0.5, unit="km/h")
+        else:
+            tracked = plan.get("target_pace_min_per_km") is not None
+            self.pace = LabeledSlider("Average pace", 3.0, 15.0, plan.get("target_pace_min_per_km") or 6.0,
+                                      step=0.1, unit="min/km")
+        self.track_pace = ft.Switch(label="I tracked my speed" if self._speed_mode else "I tracked my pace",
+                                    value=tracked, active_color=Palette.ON_ACCENT,
+                                    active_track_color=Palette.ACCENT, on_change=self._pace_toggled)
+        self.pace.control.visible = tracked
         self.pain = ft.Checkbox(label="I felt pain or discomfort", value=False, fill_color=Palette.ACCENT,
                                 check_color=Palette.ON_ACCENT)
         self.comments = ft.TextField(label="Comments", hint_text="How it felt, where it hurt...",
@@ -99,9 +108,11 @@ class LogSessionDialog(BaseDialog):
         ]
 
     def log(self):
+        tracked = self.pace.value if self.track_pace.value else None
         return {
             "duration_min": self.duration.value,
-            "avg_pace_min_per_km": self.pace.value if self.track_pace.value else None,
+            "avg_pace_min_per_km": None if self._speed_mode else tracked,
+            "avg_speed_kmh": tracked if self._speed_mode else None,
             "avg_hr_bpm": self.heart_rate.value,
             "rpe": self.rpe.value,
             "pain_reported": bool(self.pain.value),
