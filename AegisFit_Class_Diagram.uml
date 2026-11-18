@@ -1,0 +1,591 @@
+@startuml
+title AegisFit – Detailed UML Class Diagram
+hide circle
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam shadowing false
+
+' ======================== APPLICATION / PRESENTATION ========================
+package "Application & Presentation" {
+  class ConsoleApp {
+    -service: CoachService
+    -inputs: InputManager
+    -outputs: OutputManager
+    +run(): void
+    +run_setup(): void
+    +run_suggestion_flow(): void
+    +run_log_session(): void
+    +run_history(): void
+    +run_reset(): void
+  }
+  class CoachGUI {
+    +service: CoachService
+    +page: Page
+    +views: dict
+    +start(): void
+    +go(view): void
+    +refresh_current(): void
+    +apply_appearance(): void
+    +apply_preferences(): void
+    +notify(message): void
+  }
+  abstract class AppView {
+    #app: CoachGUI
+    #service: CoachService
+    +refresh(): void
+    +restyle(): void
+    +build(): Control
+  }
+  class HomeView
+  class CalendarView
+  class ProfileView
+  class ProgressView
+  class SettingsView
+  abstract class BaseDialog {
+    #app: CoachGUI
+    +open(): void
+    +close(): void
+    +show_errors(errors): void
+  }
+  class LogSessionDialog
+  class RejectDialog
+  class ConfirmDialog
+  class ResetDialog
+  class DayPickerDialog
+  class SessionDetailDialog
+  class StravaHelpDialog
+  class LabeledSlider
+  class InputManager {
+    -output: OutputManager
+    +prompt_profile(): dict
+    +prompt_session_log(): dict
+    +prompt_main_menu(...): str
+    +prompt_accept_or_reject(): str
+  }
+  class OutputManager {
+    +show_message(message): void
+    +show_error(message): void
+    +show_suggestion(plan): void
+    +show_history(records): void
+  }
+  class ReportFormatter {
+    +heading(report): str
+    +rows(report): list
+    +mix(counts): str
+  }
+  class ConsoleFormatter
+}
+AppView <|-- HomeView
+AppView <|-- CalendarView
+AppView <|-- ProfileView
+AppView <|-- ProgressView
+AppView <|-- SettingsView
+BaseDialog <|-- LogSessionDialog
+BaseDialog <|-- RejectDialog
+BaseDialog <|-- ConfirmDialog
+BaseDialog <|-- ResetDialog
+BaseDialog <|-- DayPickerDialog
+BaseDialog <|-- SessionDetailDialog
+CoachGUI *-- "1..*" AppView : owns views
+CoachGUI ..> CoachService
+CoachGUI ..> BaseDialog
+ConsoleApp ..> CoachService
+ConsoleApp *-- InputManager
+ConsoleApp *-- OutputManager
+OutputManager ..> ReportFormatter
+LabeledSlider ..> ProfileView
+
+' ======================== SERVICE / APPLICATION LOGIC ========================
+package "Application Service" {
+  class CoachService {
+    -data: DataManager
+    -ai: AIManager
+    -logic: LogicManager
+    -settings_manager: SettingsManager
+    +load(): LoadStatus
+    +save_profile(profile): list
+    +suggest_session(feedback, ...): SuggestionResult
+    +accept_session(plan, day): bool
+    +reschedule_pending(day): bool
+    +discard_pending(): bool
+    +log_session(actual): list
+    +history(): list
+    +calendar_events(...): list
+    +import_sources(): list
+    +import_history(): list
+    +review_event(event): ReviewResult
+    +session_feedback(...): FeedbackResult
+    +training_load(): dict
+    +weekly_report(...): WeeklyReportResult
+    +save_settings(settings): list
+    +test_ai_connection(...): tuple
+    +reset(): bool
+  }
+  class SuggestionResult
+  class ImportSummary
+  class FeedbackResult
+  class WeeklyReportResult
+  class CalendarEvent {
+    +day: date
+    +plan: dict
+    +title: str
+    +activity: str
+    +record_id: int
+    +feedback: dict
+    +status(): str
+    +summary(): str
+    +details(): dict
+    +as_payload(): dict
+  }
+  class CompletedSession
+  class ImportedSession
+  class PlannedSession
+}
+CoachService *-- SuggestionResult
+CoachService *-- ImportSummary
+CoachService *-- FeedbackResult
+CoachService ..> WeeklyReportResult
+CoachService ..> CalendarEvent
+CalendarEvent <|-- CompletedSession
+CalendarEvent <|-- ImportedSession
+CalendarEvent <|-- PlannedSession
+
+' ======================== DOMAIN / DATA ========================
+package "Domain & Persistence" {
+  class DataManager {
+    -storage: Storage
+    -profile: Profile
+    -pending_session: dict
+    -history: SessionHistory
+    -imports: ActivityLog
+    +load(): LoadStatus
+    +save_profile(profile): bool
+    +set_pending_session(plan): bool
+    +complete_pending_session(actual): SessionRecord
+    +import_activities(activities): int
+    +attach_feedback(record_id, feedback): bool
+    +query_sessions(filters): list
+    +sessions_this_week(): list
+    +sessions_in_week(offset): list
+    +find_record(record_id): Record
+    +reset(): bool
+  }
+  abstract class Storage {
+    +load(): tuple
+    +save(payload): bool
+    +quarantine(): bool
+    +erase(): bool
+  }
+  class JsonFileStorage {
+    -path: str
+    +load(): tuple
+    +save(payload): bool
+    +quarantine(): bool
+    +erase(): bool
+  }
+  class InMemoryStorage {
+    -payload: dict
+    +load(): tuple
+    +save(payload): bool
+    +quarantine(): bool
+    +erase(): bool
+  }
+  class Record {
+    +to_dict(): dict
+    +from_dict(data): Record
+  }
+  class Profile {
+    +age: int
+    +sex: str
+    +fitness_level: str
+    +health_concerns: str
+    +fitness_goal: str
+    +days_per_week: int
+    +session_duration_min: int
+    +equipment: list
+    +preferred_activities: list
+    +to_dict(): dict
+    +from_dict(data): Profile
+  }
+  class SessionRecord {
+    +id: int
+    +date: str
+    +planned: dict
+    +actual: dict
+    +feedback: dict
+    +set_feedback(feedback): void
+    +to_dict(): dict
+    +from_dict(data): SessionRecord
+  }
+  class ImportedActivity {
+    +id: str
+    +source: str
+    +date: str
+    +activity: str
+    +duration_min: float
+    +distance_km: float
+    +avg_hr_bpm: int
+    +perceived_exertion: int
+    +feedback: dict
+    +set_feedback(feedback): void
+    +to_dict(): dict
+    +from_dict(data): ImportedActivity
+  }
+  class SessionHistory {
+    -records: list
+    +add(record): void
+    +recent(limit): list
+    +query(filters): list
+    +find(record_id): Record
+    +count_in_week_of(day): int
+  }
+  class ActivityLog {
+    -activities: list
+    +merge(activities): int
+    +find(activity_id): ImportedActivity
+    +all(): list
+    +in_month(year, month): list
+  }
+  abstract class SessionFilter {
+    +matches(record): bool
+  }
+  class MinRpeFilter
+  class PainReportedFilter
+  class WeekFilter
+  class DataConfig
+  class AppLogger
+  enum LoadStatus {
+    OK
+    MISSING
+    CORRUPT
+  }
+}
+Storage <|-- JsonFileStorage
+Storage <|-- InMemoryStorage
+Record <|-- SessionRecord
+Record <|-- ImportedActivity
+SessionFilter <|-- MinRpeFilter
+SessionFilter <|-- PainReportedFilter
+SessionFilter <|-- WeekFilter
+DataManager *-- Profile
+DataManager *-- SessionHistory
+DataManager *-- ActivityLog
+DataManager --> Storage
+SessionHistory o-- "0..*" SessionRecord
+ActivityLog o-- "0..*" ImportedActivity
+DataManager ..> LoadStatus
+
+' ======================== TRAINING / BUSINESS RULES ========================
+package "Training Logic & Reporting" {
+  class LogicManager {
+    -evaluator: SessionEvaluator
+    -planner: WeeklyPlanner
+    -reporter: WeeklyReporter
+    -reviewer: SessionReviewer
+    +evaluate_session(profile, plan, history): EvaluationResult
+    +collect_rejections(...): list
+    +collect_flags(...): list
+    +weekly_target(profile): int
+    +usable_activities(profile): list
+    +validate_session_log(...): list
+    +review_session(...): SessionReview
+    +weekly_progress_report(...): ProgressReport
+  }
+  class EvaluationContext
+  abstract class FitnessRule {
+    +severity: str
+    +check(context, plan): RuleResult
+  }
+  class HardRule
+  class SoftRule
+  class DurationRule
+  class HeartRateRule
+  class PaceRule
+  class RiskRule
+  class RecoveryRule
+  class EquipmentActivityRule
+  class WeeklyIntensityRule
+  class LowHeartRateRule
+  class ProgressionRule
+  class MediumRiskRule
+  class ProfilePreferences {
+    +available_days(): int
+    +available_minutes(): int
+    +available_equipment(): list
+    +preferred_activities(): list
+    +usable_activities(): list
+  }
+  class WeeklyPlanner {
+    +weekly_intensity_plan(profile, history): dict
+    +intensity_cap(...): str
+    +weekly_target(profile): int
+  }
+  class SessionEvaluator {
+    +collect_rejections(context, plan): list
+    +collect_flags(context, plan): list
+    +evaluate(context, plan): EvaluationResult
+  }
+  class SessionLogValidator {
+    +validate(plan, actual): list
+  }
+  class WeekSummary {
+    +week_start: date
+    +sessions: int
+    +planned_sessions: int
+    +minutes: int
+    +planned_minutes: int
+    +avg_rpe: float
+    +avg_hr: float
+    +pain_sessions: int
+    +intensity_counts: dict
+    +activity_counts: dict
+    +from_sessions(...): WeekSummary
+    +adherence_pct(): int
+    +to_dict(): dict
+  }
+  abstract class ProgressInsight {
+    +describe(current, previous): list
+  }
+  class AdherenceInsight
+  class VolumeInsight
+  class EffortInsight
+  class PainInsight
+  class ProgressReport {
+    +this_week: WeekSummary
+    +last_week: WeekSummary
+    +insights: tuple
+    +has_sessions(): bool
+    +to_dict(): dict
+  }
+  class WeeklyReporter {
+    -insights: list
+    +build(profile, current, previous, week_start): ProgressReport
+  }
+  class ReviewCheck
+  class SessionReview
+  abstract class ReviewCheckRule {
+    +check(plan, actual): ReviewCheck
+  }
+  class DurationCheck
+  class HeartRateCheck
+  class PaceCheck
+  class EffortCheck
+  class SessionReviewer {
+    -checks: list
+    +review(plan, actual): SessionReview
+  }
+}
+FitnessRule <|-- HardRule
+FitnessRule <|-- SoftRule
+HardRule <|-- DurationRule
+HardRule <|-- HeartRateRule
+HardRule <|-- PaceRule
+HardRule <|-- RiskRule
+HardRule <|-- RecoveryRule
+HardRule <|-- EquipmentActivityRule
+HardRule <|-- WeeklyIntensityRule
+SoftRule <|-- LowHeartRateRule
+SoftRule <|-- ProgressionRule
+SoftRule <|-- MediumRiskRule
+ProgressInsight <|-- AdherenceInsight
+ProgressInsight <|-- VolumeInsight
+ProgressInsight <|-- EffortInsight
+ProgressInsight <|-- PainInsight
+ReviewCheckRule <|-- DurationCheck
+ReviewCheckRule <|-- HeartRateCheck
+ReviewCheckRule <|-- PaceCheck
+ReviewCheckRule <|-- EffortCheck
+LogicManager *-- SessionEvaluator
+LogicManager *-- WeeklyPlanner
+LogicManager *-- WeeklyReporter
+LogicManager *-- SessionReviewer
+SessionEvaluator o-- "1..*" FitnessRule
+WeeklyReporter o-- "1..*" ProgressInsight
+SessionReviewer o-- "1..*" ReviewCheckRule
+WeeklyReporter ..> WeekSummary
+WeeklyReporter ..> ProgressReport
+SessionReviewer ..> SessionReview
+SessionReview o-- "0..*" ReviewCheck
+
+' ======================== AI INTEGRATION ========================
+package "AI Coaching Integration" {
+  class AIManager {
+    -client: LLMClient
+    -session_prompts: SessionPromptBuilder
+    -session_parser: ResponseParser
+    -note_prompts: WeeklyNotePromptBuilder
+    -note_parser: ResponseParser
+    -feedback_prompts: SessionFeedbackPromptBuilder
+    -feedback_parser: ResponseParser
+    +configure(api_key, model): void
+    +verify_connection(api_key, model): tuple
+    +request_session(profile, history, ...): AIResult
+    +request_weekly_note(profile, report): AIResult
+    +request_session_feedback(profile, session, review): AIResult
+  }
+  interface LLMClient {
+    +complete(system_prompt, user_prompt): tuple
+    +configure(api_key, model): void
+    +verify(api_key, model): tuple
+  }
+  class ClaudeClient {
+    -config: AIConfig
+    -api_key: str
+    -client: Anthropic
+    +model: str
+    +complete(system_prompt, user_prompt): tuple
+    +configure(api_key, model): void
+    +verify(api_key, model): tuple
+  }
+  class AIConfig {
+    +model: str
+    +max_tokens: int
+    +timeout_seconds: float
+    +max_schema_attempts: int
+    +from_env(): AIConfig
+  }
+  class SessionRequest {
+    +profile: dict
+    +history: list
+    +user_feedback: str
+    +rule_feedback: list
+    +weekly_target: int
+    +to_payload(): dict
+  }
+  class WeeklyNoteRequest {
+    +profile: dict
+    +report: dict
+    +to_payload(): dict
+  }
+  class SessionFeedbackRequest {
+    +profile: dict
+    +session: dict
+    +review: dict
+    +to_payload(): dict
+  }
+  abstract class PromptBuilder {
+    +system_prompt: str
+    +intro: str
+    +build(request): str
+    +build_retry(prompt, error): str
+  }
+  class SessionPromptBuilder
+  class WeeklyNotePromptBuilder
+  class SessionFeedbackPromptBuilder
+  class ResponseParser {
+    -schema: ResponseSchema
+    +parse(text): tuple
+  }
+  class ResponseSchema {
+    -fields: list
+    +validate(data): str
+    +for_session_plan(): ResponseSchema
+    +for_session_feedback(): ResponseSchema
+    +for_weekly_note(): ResponseSchema
+  }
+  class AIResult {
+    +ok: bool
+    +data: dict
+    +error: str
+    +success(data): AIResult
+    +failure(error): AIResult
+    +to_dict(): dict
+  }
+  class FieldSpec
+  class TypedField
+  class ChoiceField
+  class StringListField
+  class NonEmptyTextField
+}
+LLMClient <|.. ClaudeClient
+PromptBuilder <|-- SessionPromptBuilder
+PromptBuilder <|-- WeeklyNotePromptBuilder
+PromptBuilder <|-- SessionFeedbackPromptBuilder
+AIManager --> LLMClient
+AIManager *-- PromptBuilder
+AIManager *-- ResponseParser
+ResponseParser --> ResponseSchema
+ResponseSchema o-- "1..*" FieldSpec
+FieldSpec <|-- TypedField
+FieldSpec <|-- ChoiceField
+FieldSpec <|-- StringListField
+FieldSpec <|-- NonEmptyTextField
+AIManager ..> SessionRequest
+AIManager ..> WeeklyNoteRequest
+AIManager ..> SessionFeedbackRequest
+AIManager ..> AIResult
+ClaudeClient --> AIConfig
+
+' ======================== ACTIVITY IMPORT ========================
+package "External Activity Import" {
+  class ImportResult {
+    +activities: tuple
+    +skipped: tuple
+    +error: str
+    +ok(): bool
+  }
+  interface ActivityImporter {
+    +source: str
+    +parse(data, tz): ImportResult
+    +decode(data): str
+  }
+  class StravaCsvImporter {
+    +source: str = "strava"
+    +parse(data, tz): ImportResult
+    -activity(row, tz): tuple
+    -distance_km(row, seconds): float
+  }
+}
+ActivityImporter <|.. StravaCsvImporter
+StravaCsvImporter ..> ImportResult
+DataManager ..> ImportedActivity : stores imported records
+
+' ======================== SETTINGS ========================
+package "Settings" {
+  class SettingsManager {
+    -storage: Storage
+    -settings: AppSettings
+    -status: LoadStatus
+    +load(): LoadStatus
+    +save(settings): list
+    +timezone_name(): str
+    +today(): date
+    +api_key_source(): str
+  }
+  class AppSettings {
+    +api_key: str
+    +model: str
+    +theme: ThemeColors
+    +week_starts_on: str
+    +show_splash: bool
+    +animations: bool
+    +timezone: str
+    +to_dict(): dict
+    +from_dict(data): AppSettings
+    +problems(): list
+  }
+  class ThemeColors {
+    +accent: str
+    +background: str
+    +card: str
+    +text: str
+    +to_dict(): dict
+    +from_dict(data): ThemeColors
+    +problems(): list
+    +is_dark(): bool
+  }
+  class PrivateJsonFileStorage
+}
+SettingsManager --> Storage
+SettingsManager *-- AppSettings
+AppSettings *-- ThemeColors
+CoachService --> SettingsManager
+
+' ======================== CROSS-LAYER DEPENDENCIES ========================
+CoachService --> DataManager
+CoachService --> AIManager
+CoachService --> LogicManager
+CoachService ..> ActivityImporter : imports CSV
+CoachService ..> AppSettings
+@enduml
