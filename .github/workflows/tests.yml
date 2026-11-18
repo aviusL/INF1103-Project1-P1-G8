@@ -1,0 +1,32 @@
+# CI: runs the offline test suite on every push and pull request,
+# once on plain Python and once inside the Docker image.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit tests (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python -m unittest -v
+
+  docker-tests:
+    name: Tests inside Docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t aegisfit .
+      - name: Run tests in the container
+        run: docker run --rm aegisfit python -m unittest -v
