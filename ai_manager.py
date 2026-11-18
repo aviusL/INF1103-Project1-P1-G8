@@ -93,6 +93,23 @@ class WeeklyNoteRequest:
 
 
 @dataclass(frozen=True)
+class SessionFeedbackRequest:
+    #everything the AI needs to review one finished session
+    _PROFILE_FIELDS = ("age", "sex", "fitness_goal", "fitness_level", "health_concerns", "preferred_activities")
+
+    profile: dict
+    session: dict        # planned + actual for a logged session, or the stats of an imported one
+    review: dict         # LogicManager's plan-vs-actual comparison (the facts to write about)
+
+    def to_payload(self):
+        return {
+            "profile": {field: self.profile.get(field) for field in self._PROFILE_FIELDS},
+            "session": self.session,
+            "app_review": self.review,
+        }
+
+
+@dataclass(frozen=True)
 class AIResult:
     #outcome of one ai request. when ok is True data is set, otherwise error is.
     ok: bool
@@ -224,6 +241,16 @@ class ResponseSchema:
             TypedField("cooldown", (str,)),
             TypedField("rationale", (str,)),
             ChoiceField("risk_level", RISK_VALUES),
+        ])
+
+    @classmethod
+    def for_session_feedback(cls):
+        #the shape SessionFeedbackPromptBuilder asks Claude to reply with.
+        return cls([
+            NonEmptyTextField("summary"),
+            StringListField("went_well"),
+            StringListField("to_improve"),
+            NonEmptyTextField("next_time"),
         ])
 
     @classmethod
@@ -374,6 +401,40 @@ Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
     def intro(self):
         return "Write the weekly coaching note for this user:"
 
+class SessionFeedbackPromptBuilder(PromptBuilder):
+    """Owns all prompt wording for the coach's review of one finished session."""
+
+    _SYSTEM_PROMPT = """You are the coach inside a fitness coaching app, reviewing ONE finished session for the user.
+You receive a JSON payload with the user's profile, the session and an app_review calculated by the app.
+
+If session.planned is present, the session was planned by the app and then logged by the user: compare
+what was planned (duration, intensity, target heart rate, target pace, main set) with what was actually
+done (duration, average heart rate, pace, RPE, pain, the user's comments). app_review.adherence and
+app_review.checks already state how each number compared with the plan; use them and do not contradict them.
+If session.source is present instead, it is past training imported from another app with no plan:
+review it on its own against the user's goal and level.
+
+Write in plain, encouraging language addressed to the user as "you". Base every statement on the data given
+and never invent numbers. If pain was reported or health concerns are listed, advise caution and suggest
+seeing a professional if pain continues; never diagnose. Keep the whole review under 120 words.
+
+Reply with ONLY one JSON object, no markdown, no commentary, exactly this shape:
+{
+  "summary": "string, 2-3 sentences: how the session went, compared with the plan when there is one",
+  "went_well": ["string", ...],
+  "to_improve": ["string", ...],
+  "next_time": "string, one concrete suggestion for the next similar session"
+}
+went_well and to_improve hold 1-3 short points each (to_improve may be empty if nothing needs changing)."""
+
+    @property
+    def system_prompt(self):
+        return self._SYSTEM_PROMPT
+
+    @property
+    def intro(self):
+        return "Review this session for the user:"
+
 # --------------------------------------------------------------------------- #
 # Model clients
 # --------------------------------------------------------------------------- #
@@ -504,6 +565,8 @@ class AIManager:
         self._session_parser = ResponseParser(ResponseSchema.for_session_plan())
         self._note_prompts = WeeklyNotePromptBuilder()
         self._note_parser = ResponseParser(ResponseSchema.for_weekly_note())
+        self._feedback_prompts = SessionFeedbackPromptBuilder()
+        self._feedback_parser = ResponseParser(ResponseSchema.for_session_feedback())
 
     @property
     def model(self):
@@ -527,6 +590,11 @@ class AIManager:
     def request_weekly_note(self, profile, report):
         """Ask the model for a short coaching note on a weekly progress report (a plain dict)."""
         return self._ask(self._note_prompts, self._note_parser, WeeklyNoteRequest(profile, report))
+
+    def request_session_feedback(self, profile, session, review):
+        """Ask the model to review one finished session against its plan (review: a SessionReview dict)."""
+        return self._ask(self._feedback_prompts, self._feedback_parser,
+                         SessionFeedbackRequest(profile, session, review))
 
     def _ask(self, prompts, parser, request):
         """Shared request loop for any PromptBuilder: call the model, re-ask once if the reply is malformed."""

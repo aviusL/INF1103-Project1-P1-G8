@@ -16,8 +16,8 @@ HEADING_FONT = "Montserrat"
 FONTS = {HEADING_FONT: "fonts/Montserrat-ExtraBoldItalic.ttf"}   # path is relative to ASSETS_DIR
 
 # Status colours keep their meaning whatever the theme, with a darker set for light backgrounds.
-_STATUS_DARK = {"DONE": "#2DD4BF", "PAIN": "#F5B83D", "PLANNED": "#60A5FA", "ERROR": "#FF6B6B"}
-_STATUS_LIGHT = {"DONE": "#0F766E", "PAIN": "#B45309", "PLANNED": "#1D4ED8", "ERROR": "#C62828"}
+_STATUS_DARK = {"DONE": "#2DD4BF", "PAIN": "#F5B83D", "PLANNED": "#60A5FA", "IMPORTED": "#C084FC", "ERROR": "#FF6B6B"}
+_STATUS_LIGHT = {"DONE": "#0F766E", "PAIN": "#B45309", "PLANNED": "#1D4ED8", "IMPORTED": "#7E22CE", "ERROR": "#C62828"}
 
 
 class Palette:
@@ -26,7 +26,7 @@ class Palette:
     ACCENT = ACCENT_SOFT = ON_ACCENT = ""
     BG = SURFACE = CARD = CARD_HIGH = BORDER = ""
     TEXT = MUTED = ""
-    DONE = PAIN = PLANNED = ERROR = ON_ERROR = ""
+    DONE = PAIN = PLANNED = IMPORTED = ERROR = ON_ERROR = ""
     IS_DARK = True
 
     @classmethod
@@ -44,13 +44,13 @@ class Palette:
             setattr(cls, name, value)
         cls.ON_ERROR = readable_on(cls.ERROR)
         # dicts other modules imported by reference: update in place
-        STATUS_COLORS.update({"done": cls.DONE, "pain": cls.PAIN, "planned": cls.PLANNED})
+        STATUS_COLORS.update({"done": cls.DONE, "pain": cls.PAIN, "planned": cls.PLANNED, "imported": cls.IMPORTED})
         INTENSITY_COLORS.update({"low": cls.DONE, "moderate": cls.PAIN, "high": cls.ERROR})
 
 
 # calendar marker colour for each CalendarEvent.status
 STATUS_COLORS = {}
-STATUS_LABELS = {"done": "Completed", "pain": "Pain reported", "planned": "Planned"}
+STATUS_LABELS = {"done": "Completed", "pain": "Pain reported", "planned": "Planned", "imported": "Imported"}
 INTENSITY_COLORS = {}
 
 Palette.apply(DEFAULT_THEME)
@@ -63,6 +63,8 @@ ACTIVITY_ICONS = {
     "strength training": ft.Icons.FITNESS_CENTER,
     "hiit": ft.Icons.LOCAL_FIRE_DEPARTMENT,
     "rowing": ft.Icons.ROWING,
+    "yoga": ft.Icons.SELF_IMPROVEMENT,
+    "workout": ft.Icons.FITNESS_CENTER,
 }
 
 

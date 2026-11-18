@@ -31,6 +31,9 @@ class CoachGUI:
         self.service = service
         Palette.apply(service.settings.theme)     # before any control is built
         self.views = [HomeView(self), CalendarView(self), ProgressView(self), ProfileView(self), SettingsView(self)]
+        # One file picker per page (a Flet service). Kept here so it is not dropped as unused; the
+        # Profile tab's upload button opens it inside the click, as browsers require.
+        self.file_picker = ft.FilePicker(on_result=self._on_files_picked)
         self._index = self.HOME
         self._body = ft.AnimatedSwitcher(
             content=ft.Container(), transition=ft.AnimatedSwitcherTransition.FADE, expand=True,
@@ -172,6 +175,9 @@ class CoachGUI:
         self._body.reverse_duration = SWITCH_REVERSE_MS if on else 0
         if update:
             self.page.update()
+
+    async def _on_files_picked(self, e):
+        await self.views[self.PROFILE].handle_picked_files(e)
 
     # ------------------------------------------------------------------ helpers
     def notify(self, message, error=False, action=None, on_action=None):

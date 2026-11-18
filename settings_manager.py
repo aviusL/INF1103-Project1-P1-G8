@@ -349,6 +349,10 @@ class SettingsManager:
         name = self.timezone_name
         return utc.astimezone(ZoneInfo(name)) if name else utc.astimezone()
 
+    def tzinfo(self):
+        """The user's time zone, for turning UTC times (such as Strava's) into local days."""
+        return self.now().tzinfo
+
     def today(self):
         """Today's date where the user is. This is the clock the whole app uses, so a Docker
         container running on UTC still gives the right day for someone in Singapore."""

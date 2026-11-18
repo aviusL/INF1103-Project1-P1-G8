@@ -20,9 +20,9 @@ Many people follow generic workout plans that ignore how their last session actu
 | --- | --- |
 | **Splash** | Animated start screen while your saved data loads in the background |
 | **Home** | This week's progress ring and intensity plan, "Plan my next session", the AI suggestion card (safety score, warnings, warm-up / main set / cool-down), **Accept** (pick the day in a date picker) or **Not for me** (quick-reason chips + free text sent back to the AI), the up-next session with Log / Reschedule / Discard, recent activity |
-| **Calendar** | Month grid with markers for completed (teal), pain-reported (amber) and planned (blue) sessions; month navigation; *Pain only* and *Hard sessions (RPE 8+)* filters; month stats; tap a day to see its sessions and open the details |
+| **Calendar** | Month grid with markers for completed (teal), pain-reported (amber), planned (blue) and imported Strava (violet) sessions; month navigation; *Pain only* and *Hard sessions (RPE 8+)* filters; month stats; tap a session for its details, an instant **plan vs actual** comparison and **Get coach feedback** |
 | **Progress** | Weekly progress report (the Phase 2 feature): sessions, minutes, effort, pain, this week vs last week, a six-week training-load chart, observations, and an on-demand AI coach's note |
-| **Profile** | Edit name, age, sex, height, weight (sliders and toggles), fitness level, days per week, minutes per session, goal, health concerns, equipment (checkboxes) and activities (chips). Live BMI and estimated max heart rate, equipment warnings, undo, and a "Reset all data" danger zone that requires typing RESET |
+| **Profile** | Edit name, age, sex, height, weight (sliders and toggles), fitness level, days per week, minutes per session, goal, health concerns, equipment (checkboxes) and activities (chips). Live BMI and estimated max heart rate, equipment warnings, undo, **Training history** (upload your Strava `activities.csv`, with a **?** that explains where to find it), and a "Reset all data" danger zone that requires typing RESET |
 | **Settings** | Claude API key (masked, with **Test connection**) and model (Haiku / Sonnet / Opus); colour theme from presets or your own RGB hex codes, with a live preview and contrast check; **time zone**; week start day for the calendar; splash screen and animation switches; app and file locations |
 
 The log-session dialog uses sliders for duration, heart rate, effort (RPE) and pace, a pain checkbox and a comments field.
@@ -84,6 +84,21 @@ Session days are plain dates (`2026-11-20`) with no clock time, so they cannot d
 
 ---
 
+## Strava history and coach feedback
+
+**Importing past training.** Profile → *Training history* → **Upload Strava activities.csv**. The **?** button explains how to get the file: on strava.com, *Settings → My Account → Download or Delete Your Account → Request your archive*; Strava emails a .zip, and `activities.csv` is inside it ([Strava's guide](https://support.strava.com/hc/en-us/articles/216918437-Exporting-your-Data-and-Bulk-Export)). Upload the .csv, not the .zip (limit 15 MB, which is many thousands of activities). No Strava account? `samples/strava_activities_sample.csv` has 48 made-up activities (runs, rides, swims, gym) from September to November 2026 to try it with.
+
+* Each activity appears on the calendar on the right local day, with its key stats: distance, moving and elapsed time, pace (runs and walks) or speed (rides), average and max heart rate, elevation, calories, Strava's Relative Effort and Perceived Exertion. Strava stores start times in UTC, so the import converts them with your time zone from Settings (a 23:30 UTC run is the next morning in Singapore).
+* Imported activities are **not** sent to the AI and do not enter the planner's history or safety rules; they are history to look at. They are stored in the same data file (`imported_activities`), so they survive restarts and Docker rebuilds when `data/` is mounted.
+* Importing the same or a newer archive again only adds activities you don't have yet (matched by Strava's activity ID). Unreadable rows are skipped and listed; the rest still import. *Remove imported activities* takes them all out again without touching sessions logged in AegisFit.
+
+**Coach feedback on one session.** Open any completed or imported session on the calendar:
+
+* **Plan vs actual** appears straight away and needs no AI. `SessionReviewer` in `logic_manager.py` compares duration, heart rate, pace and effort (RPE against the planned intensity) and names the outcome: *On plan*, *Harder/Easier than planned*, *Longer/Shorter than planned* or *Mixed*. It also flags pain, an average heart rate above 90% of max, and very high effort.
+* **Get coach feedback** sends the plan, what you did and that comparison to Claude, which writes a short review (summary, what went well, what to work on, one suggestion for next time). The app's own verdict is kept, and the review is saved with the session, so reopening it costs no further request. Imported activities have no plan, so the coach reviews them against your goal instead.
+
+---
+
 ## Settings and colours
 
 Settings are saved in `data/settings.json`, separate from your training data, so **Reset all data** keeps your key and theme. A damaged settings file is backed up and replaced with defaults.
@@ -128,18 +143,19 @@ ai_manager   logic_manager   data_manager   (JSON file)
 | `gui/app.py` | `CoachGUI`: splash screen, bottom navigation, snackbars, date picker |
 | `gui/base_view.py` | `AppView` abstract base class for the tabs |
 | `gui/home_view.py`, `calendar_view.py`, `progress_view.py`, `profile_view.py`, `settings_view.py` | The five tabs |
-| `gui/dialogs.py` | Log session, reject, confirm, reset, day-picker and session-detail dialogs |
+| `gui/dialogs.py` | Log session, reject, confirm, reset, day-picker, session-detail (with coach feedback) and Strava help dialogs |
 | `gui/widgets.py`, `gui/theme.py` | Shared components, colours and the Montserrat heading font (`gui/assets/fonts`) |
 | `io_manager.py` | Terminal input/output (the only `print()`/`input()`), plus `ReportFormatter` wording shared with the GUI |
 | `ai_manager.py` | The only file that calls Claude; builds prompts and validates the JSON reply |
-| `logic_manager.py` | Safety rules, weekly planning and the weekly progress report |
-| `data_manager.py` | JSON persistence, history queries and filters |
+| `logic_manager.py` | Safety rules, weekly planning, the weekly progress report and the plan-vs-actual session review |
+| `data_manager.py` | JSON persistence, history queries and filters, imported activities (`ImportedActivity`, `ActivityLog`) and saved coach feedback |
+| `activity_import.py` | `ActivityImporter` interface and `StravaCsvImporter` (reads Strava's `activities.csv`, UTC to local days) |
 | `test_*.py` | Offline unit tests |
 | `Dockerfile`, `requirements.txt` | Container and dependency definition |
 
 ### OOP highlights
 
-* **Polymorphism:** `CalendarEvent` has two subclasses, `CompletedSession` and `PlannedSession`, and the calendar renders both without type checks. The shell drives every `AppView` subclass through `refresh()`/`root`. There are also the existing `FitnessRule`, `ProgressInsight`, `Storage`, `LLMClient`, `PromptBuilder` and `SessionFilter` hierarchies.
+* **Polymorphism:** `CalendarEvent` has three subclasses, `CompletedSession`, `PlannedSession` and `ImportedSession`, and the calendar, month stats and detail dialog use them without type checks (each says whether it `can_review`, its `minutes`, `effort` and what the coach should see). `ActivityImporter` (Strava today, another source later) and `ReviewCheckRule` (duration, heart rate, pace, effort) are new plug-in hierarchies. The shell drives every `AppView` subclass through `refresh()`/`root`. There are also the existing `FitnessRule`, `ProgressInsight`, `Storage`, `LLMClient`, `PromptBuilder` and `SessionFilter` hierarchies.
 * **Inheritance and default behaviour:** `PrivateJsonFileStorage` extends `JsonFileStorage` to make the settings file owner-only. `LLMClient` gives every client no-op `configure()`/`verify()` methods that `ClaudeClient` overrides, so test stubs keep working unchanged.
 * **Value objects:** `AppSettings` and `ThemeColors` are frozen dataclasses. Screens change settings by building a new object and passing it to `CoachService.save_settings()`, which validates it before anything is saved.
 * **Composition / association:** `CoachGUI` creates and owns its views. Views keep a reference to the shell. `CoachService` is handed the managers it uses.
@@ -173,4 +189,5 @@ Each flag lowers the session score by 20 points, starting from 100.
 * The API key is stored as plain text in `data/settings.json` (owner-only permissions on Linux and macOS). `data/` is in `.gitignore` and `.dockerignore`, so the key is never committed or built into the image.
 * Maximum heart rate is estimated as 220 minus age, a population average rather than a measured value.
 * Rules are fixed thresholds and are not personalised.
+* Only Strava's `activities.csv` can be imported (not Garmin files or the individual .fit/.gpx files). Imported activities are shown on the calendar but are not counted in the Progress tab's weekly report or training-load chart.
 * This is not medical advice. Anyone with a medical condition should consult a professional.

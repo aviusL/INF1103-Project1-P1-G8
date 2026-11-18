@@ -13,15 +13,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from activity_import import IMPORTERS
 from ai_manager import AIManager
 from data_manager import AppLogger, DataConfig, DataManager, LoadStatus
-from logic_manager import LogicManager, ProgressReport
+from logic_manager import LogicManager, ProgressReport, pace_text
 from settings_manager import AppSettings, SettingsManager, api_key_problem, clean_api_key
 
 logger = logging.getLogger("coach_service")
 
 APP_NAME = "AegisFit"
-APP_VERSION = "2.1"
+APP_VERSION = "2.2"
 APP_TAGLINE = "The AI proposes. The code decides."
 
 HISTORY_WINDOW = 5        # how many past sessions are sent to the AI
@@ -75,6 +76,53 @@ class SuggestionResult:
 
 
 @dataclass(frozen=True)
+class ImportSummary:
+    """Outcome of importing an exported history file."""
+    added: int = 0
+    already_imported: int = 0
+    skipped: tuple = ()             # (row number, reason) for rows that could not be read
+    error: Optional[str] = None
+    first_day: Optional[datetime.date] = None
+    last_day: Optional[datetime.date] = None
+
+    @property
+    def ok(self):
+        return self.error is None
+
+    def message(self):
+        """One line for the user."""
+        if self.error:
+            return "Import failed: " + self.error
+        parts = []
+        if self.added:
+            span = ""
+            if self.first_day and self.last_day:
+                span = " ({} to {})".format(self.first_day.strftime("%d %b %Y"), self.last_day.strftime("%d %b %Y"))
+            parts.append("Imported {} {}{}".format(self.added, "activity" if self.added == 1 else "activities", span))
+        else:
+            parts.append("No new activities")
+        if self.already_imported:
+            parts.append("{} already imported".format(self.already_imported))
+        if self.skipped:
+            parts.append("{} unreadable {} skipped".format(len(self.skipped), "row" if len(self.skipped) == 1 else "rows"))
+        return ", ".join(parts) + "."
+
+
+@dataclass(frozen=True)
+class FeedbackResult:
+    """The coach's review of one session. review (the app's own comparison) is set whenever the
+    session was found, even if the AI could not be reached."""
+    feedback: Optional[dict] = None
+    review: Optional[object] = None
+    error: Optional[str] = None
+    saved: bool = True
+
+    @property
+    def ok(self):
+        return self.feedback is not None
+
+
+@dataclass(frozen=True)
 class WeeklyReportResult:
     """The weekly progress report plus the AI coach's note (or why there is none)."""
     report: ProgressReport
@@ -110,6 +158,40 @@ class CalendarEvent(ABC):
         return str(self.plan.get("activity") or "").strip().lower()
 
     @property
+    def record_id(self):
+        """Stored id (logged sessions: a number, imported activities: 'strava-...'), None if unsaved."""
+        return self._session.get("id")
+
+    @property
+    def feedback(self):
+        """The coach's saved review of this session, if one was asked for."""
+        feedback = self._session.get("coach_feedback")
+        return feedback if isinstance(feedback, dict) else None
+
+    @property
+    def can_review(self):
+        """Whether the coach can give feedback (only on sessions that have been done)."""
+        return False
+
+    @property
+    def minutes(self):
+        """Minutes actually trained, or None for a session not done yet."""
+        return None
+
+    @property
+    def effort(self):
+        """How hard it felt (RPE 1-10), if known."""
+        return None
+
+    def comparison_inputs(self):
+        """(planned, actual) for the logic layer's session review."""
+        return None, {}
+
+    def as_payload(self):
+        """The session as the coach should see it when writing feedback."""
+        return {"date": self._day.isoformat()}
+
+    @property
     @abstractmethod
     def status(self):
         """'done', 'pain' or 'planned' - decides the colour of the calendar marker."""
@@ -126,9 +208,34 @@ class CalendarEvent(ABC):
 class CompletedSession(CalendarEvent):
     """A session that was logged: shows what was actually done."""
 
+    _PLAN_FIELDS = ("exercise_type", "activity", "duration_min", "intensity", "target_hr_bpm",
+                    "target_pace_min_per_km", "main_set", "rationale")
+
     @property
     def actual(self):
         return self._session.get("actual") or {}
+
+    @property
+    def can_review(self):
+        return self.record_id is not None
+
+    @property
+    def minutes(self):
+        return _number(self.actual.get("duration_min"))
+
+    @property
+    def effort(self):
+        value = self.actual.get("rpe")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def comparison_inputs(self):
+        return (self._session.get("planned") or None), self.actual
+
+    def as_payload(self):
+        plan = self._session.get("planned") or {}
+        return {"date": self._day.isoformat(),
+                "planned": {field: plan.get(field) for field in self._PLAN_FIELDS if field in plan},
+                "actual": dict(self.actual)}
 
     @property
     def status(self):
@@ -151,12 +258,94 @@ class CompletedSession(CalendarEvent):
             ("Planned", "{} min, {} intensity".format(self.plan.get("duration_min", "?"),
                                                     self.plan.get("intensity", "?"))),
             ("Done", "{} min".format(self.actual.get("duration_min", "?"))),
-            ("Pace", "-" if pace is None else "{} min/km".format(pace)),
+            ("Pace", "-" if pace is None else pace_text(pace)),
             ("Heart rate", "{} bpm".format(self.actual.get("avg_hr_bpm", "-"))),
             ("Effort", "RPE {}".format(self.actual.get("rpe", "-"))),
             ("Pain", "yes" if self.actual.get("pain_reported") else "no"),
             ("Comments", self.actual.get("comments") or "-"),
         ]
+
+
+class ImportedSession(CalendarEvent):
+    """Past training imported from Strava: shows its key stats. It has no plan, so the coach
+    reviews it on its own rather than against one."""
+
+    _STAT_FIELDS = ("name", "activity", "sport_type", "start_time", "duration_min", "elapsed_min", "distance_km",
+                    "avg_pace_min_per_km", "avg_speed_kmh", "avg_hr_bpm", "max_hr_bpm", "elevation_gain_m",
+                    "calories", "relative_effort", "perceived_exertion", "description")
+
+    @property
+    def title(self):
+        return str(self._session.get("name") or self._session.get("sport_type") or "Activity").strip()
+
+    @property
+    def source(self):
+        return str(self._session.get("source") or "import")
+
+    @property
+    def status(self):
+        return "imported"
+
+    @property
+    def can_review(self):
+        return True
+
+    @property
+    def minutes(self):
+        return _number(self._session.get("duration_min"))
+
+    @property
+    def effort(self):
+        value = self._session.get("perceived_exertion")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def _get(self, key):
+        return self._session.get(key)
+
+    def summary(self):
+        parts = []
+        if self._get("distance_km"):
+            parts.append("{:g} km".format(self._get("distance_km")))
+        parts.append("{:g} min".format(self.minutes or 0))
+        if self._get("avg_pace_min_per_km"):
+            parts.append(pace_text(self._get("avg_pace_min_per_km")))
+        elif self._get("avg_speed_kmh"):
+            parts.append("{:g} km/h".format(self._get("avg_speed_kmh")))
+        if self._get("avg_hr_bpm"):
+            parts.append("{} bpm".format(self._get("avg_hr_bpm")))
+        return " · ".join(parts)
+
+    def details(self):
+        rows = [("Source", self.source.capitalize()), ("Type", self._get("sport_type") or self.activity or "-")]
+        optional = (
+            ("Started", "start_time", "{}"),
+            ("Distance", "distance_km", "{:g} km"),
+            ("Moving time", "duration_min", "{:g} min"),
+            ("Elapsed", "elapsed_min", "{:g} min"),
+            ("Pace", "avg_pace_min_per_km", None),
+            ("Speed", "avg_speed_kmh", "{:g} km/h"),
+            ("Avg heart rate", "avg_hr_bpm", "{} bpm"),
+            ("Max heart rate", "max_hr_bpm", "{} bpm"),
+            ("Elevation gain", "elevation_gain_m", "{} m"),
+            ("Calories", "calories", "{} kcal"),
+            ("Relative effort", "relative_effort", "{}"),
+            ("Perceived effort", "perceived_exertion", "RPE {}"),
+            ("Notes", "description", "{}"),
+        )
+        for name, key, pattern in optional:
+            value = self._get(key)
+            if value in (None, ""):
+                continue
+            rows.append((name, pace_text(value) if pattern is None else pattern.format(value)))
+        return rows
+
+    def comparison_inputs(self):
+        return None, {"duration_min": self._get("duration_min"), "avg_hr_bpm": self._get("avg_hr_bpm"),
+                      "avg_pace_min_per_km": self._get("avg_pace_min_per_km"), "rpe": self.effort}
+
+    def as_payload(self):
+        stats = {key: self._session[key] for key in self._STAT_FIELDS if key in self._session}
+        return dict(stats, date=self._day.isoformat(), source=self.source)
 
 
 class PlannedSession(CalendarEvent):
@@ -196,12 +385,13 @@ class CoachService:
 
     SCHEDULE_KEY = "scheduled_for"   # extra key stored on the pending session
 
-    def __init__(self, data, ai, logic, clock=datetime.date.today, settings=None):
+    def __init__(self, data, ai, logic, clock=datetime.date.today, settings=None, importers=None):
         self._data = data
         self._ai = ai
         self._logic = logic
         self._clock = clock
         self._settings = settings or SettingsManager.in_memory()
+        self._importers = dict(importers or IMPORTERS)   # source name -> ActivityImporter class
         self._apply_ai_settings()
 
     @classmethod
@@ -423,7 +613,7 @@ class CoachService:
         return self._data.filter_sessions(min_rpe=min_rpe, pain_only=pain_only)
 
     def calendar_events(self, year, month, pain_only=False, min_rpe=None):
-        """Events for one month, as {date: [CalendarEvent, ...]}."""
+        """Events for one month, as {date: [CalendarEvent, ...]}: logged, imported and planned."""
         events = {}
         for record in self.history(pain_only=pain_only, min_rpe=min_rpe):
             try:
@@ -432,10 +622,94 @@ class CoachService:
                 continue
             if (day.year, day.month) == (year, month):
                 events.setdefault(day, []).append(CompletedSession(day, record))
+        if not pain_only:          # exports do not record pain, so imported activities never match that filter
+            for activity in self._data.imported_in_month(year, month):
+                event = ImportedSession(datetime.date.fromisoformat(activity["date"]), activity)
+                if min_rpe is None or (event.effort is not None and event.effort >= min_rpe):
+                    events.setdefault(event.day, []).append(event)
         planned_day = self.pending_date()
         if planned_day and (planned_day.year, planned_day.month) == (year, month) and not (pain_only or min_rpe):
             events.setdefault(planned_day, []).append(PlannedSession(planned_day, self._data.pending_session))
         return events
+
+    # ---- imported history (Strava) ----
+    @property
+    def import_sources(self):
+        return tuple(self._importers)
+
+    def import_history(self, data, source="strava"):
+        """Import an exported history file (raw bytes). Nothing goes to the AI: imported activities
+        are shown on the calendar as they are. Returns an ImportSummary."""
+        importer_class = self._importers.get(source)
+        if importer_class is None:
+            return ImportSummary(error="importing from {} is not supported".format(source))
+        result = importer_class().parse(data, self._settings.tzinfo())
+        if not result.ok:
+            return ImportSummary(skipped=result.skipped, error=result.error)
+        added, already, saved = self._data.import_activities(result.activities)
+        if not saved:
+            return ImportSummary(skipped=result.skipped, error="could not save the imported activities to disk")
+        days = sorted(activity["date"] for activity in result.activities)
+        first, last = (datetime.date.fromisoformat(days[0]), datetime.date.fromisoformat(days[-1])) if days else (None, None)
+        logger.info("Imported %d %s activities (%d already stored, %d rows skipped)",
+                    added, source, already, len(result.skipped))
+        return ImportSummary(added, already, result.skipped, first_day=first, last_day=last)
+
+    @property
+    def imported_count(self):
+        return self._data.imported_count
+
+    def imported_overview(self):
+        """(count, first day, last day) of the imported history, for the Profile tab."""
+        activities = self._data.imported_activities()
+        if not activities:
+            return 0, None, None
+        return (len(activities), datetime.date.fromisoformat(activities[0]["date"]),
+                datetime.date.fromisoformat(activities[-1]["date"]))
+
+    def clear_imported(self):
+        return self._data.clear_imported()
+
+    # ---- coach feedback on one session ----
+    def review_event(self, event):
+        """The app's own plan-vs-actual comparison (a logic_manager.SessionReview). No AI, instant."""
+        planned, actual = event.comparison_inputs()
+        return self._logic.review_session(planned, actual, self._data.profile or {})
+
+    def event_for(self, record_id):
+        """The stored session or imported activity with this id, as a CalendarEvent (or None)."""
+        kind, record = self._data.find_record(record_id)
+        if record is None:
+            return None
+        try:
+            day = datetime.date.fromisoformat(record.get("date"))
+        except (TypeError, ValueError):
+            return None
+        return (ImportedSession if kind == "imported" else CompletedSession)(day, record)
+
+    def session_feedback(self, record_id):
+        """Ask the coach to review one finished session, and save the review with it.
+        Blocking (calls the API), so GUIs run it off the UI thread. Returns a FeedbackResult."""
+        if not self.has_profile:
+            return FeedbackResult(error="set up your profile first, so the coach knows your goal")
+        event = self.event_for(record_id)
+        if event is None or not event.can_review:
+            return FeedbackResult(error="that session could not be found")
+        review = self.review_event(event)
+        result = self._ai.request_session_feedback(self._data.profile, event.as_payload(), review.to_dict())
+        if not result.ok:
+            return FeedbackResult(review=review, error="coach unavailable: {}".format(result.error))
+        feedback = {
+            "summary": result.data["summary"].strip(),
+            "went_well": [point.strip() for point in result.data["went_well"] if point.strip()][:3],
+            "to_improve": [point.strip() for point in result.data["to_improve"] if point.strip()][:3],
+            "next_time": result.data["next_time"].strip(),
+            "adherence": review.adherence,       # the code's verdict, not the AI's
+            "generated_on": self.today.isoformat(),
+            "model": self.ai_model,
+        }
+        saved = self._data.attach_feedback(record_id, feedback)
+        return FeedbackResult(feedback, review, saved=saved)
 
     # ---- weekly progress report ----
     def training_load(self, weeks=6):
@@ -466,6 +740,6 @@ class CoachService:
 
 __all__ = [
     "APP_NAME", "APP_VERSION", "APP_TAGLINE", "CoachService", "SuggestionResult", "WeeklyReportResult", "CalendarEvent", "CompletedSession",
-    "PlannedSession", "LoadStatus", "PROFILE_LIMITS", "FITNESS_LEVELS", "SEX_OPTIONS",
+    "PlannedSession", "ImportedSession", "ImportSummary", "FeedbackResult", "LoadStatus", "PROFILE_LIMITS", "FITNESS_LEVELS", "SEX_OPTIONS",
     "EQUIPMENT_OPTIONS", "ACTIVITY_OPTIONS", "LOG_LIMITS",
 ]

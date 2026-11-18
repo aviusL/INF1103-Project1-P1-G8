@@ -194,15 +194,19 @@ class Profile(Record):
 
 class SessionRecord(Record):
 
-    def __init__(self, record_id, date, planned, actual):
+    def __init__(self, record_id, date, planned, actual, feedback=None):
         self._id = record_id
         self._date = date
         self._planned = copy.deepcopy(planned)
         self._actual = copy.deepcopy(actual)
+        self._feedback = copy.deepcopy(feedback)    # the coach's review, once asked for
 
     @property
     def id(self):
         return self._id
+
+    def set_feedback(self, feedback):
+        self._feedback = copy.deepcopy(feedback)
 
     @property
     def rpe(self):
@@ -221,18 +225,122 @@ class SessionRecord(Record):
             return None
 
     def to_dict(self):
-        return {
+        data = {
             "id": self._id,
             "date": self._date,
             "planned": copy.deepcopy(self._planned),
             "actual": copy.deepcopy(self._actual),
         }
+        if self._feedback is not None:
+            data["coach_feedback"] = copy.deepcopy(self._feedback)
+        return data
 
     @classmethod
     def from_dict(cls, data):
         if not isinstance(data, dict):
             raise ValueError("session record must be a dict")
-        return cls(data.get("id"), data.get("date"), data.get("planned"), data.get("actual", {}))
+        feedback = data.get("coach_feedback")
+        return cls(data.get("id"), data.get("date"), data.get("planned"), data.get("actual", {}),
+                   feedback if isinstance(feedback, dict) else None)
+
+
+class ImportedActivity(Record):
+    """An activity imported from another app (see activity_import.py): history to show, not a plan.
+
+    Stored as a flat dict of stats. Only id, source and date are required; every stat is optional
+    because exports leave many of them blank."""
+
+    def __init__(self, data):
+        self._data = copy.deepcopy(data)
+
+    @property
+    def id(self):
+        return self._data["id"]
+
+    @property
+    def day(self):
+        return datetime.date.fromisoformat(self._data["date"])
+
+    @property
+    def perceived_exertion(self):
+        value = self._data.get("perceived_exertion")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def set_feedback(self, feedback):
+        if feedback is None:
+            self._data.pop("coach_feedback", None)
+        else:
+            self._data["coach_feedback"] = copy.deepcopy(feedback)
+
+    def to_dict(self):
+        return copy.deepcopy(self._data)
+
+    @classmethod
+    def from_dict(cls, data):
+        if not isinstance(data, dict):
+            raise ValueError("imported activity must be a dict")
+        if not isinstance(data.get("id"), str) or not data["id"].strip():
+            raise ValueError("imported activity needs an id")
+        if not isinstance(data.get("source"), str):
+            raise ValueError("imported activity needs a source")
+        try:
+            datetime.date.fromisoformat(data.get("date"))
+        except (TypeError, ValueError):
+            raise ValueError("imported activity has no valid date") from None
+        return cls(data)
+
+
+class ActivityLog:
+    """Imported activities, oldest first, at most one per id (so importing the same file twice adds nothing)."""
+
+    def __init__(self, activities=None):
+        self._items = {}
+        for activity in activities or []:
+            self._items.setdefault(activity.id, activity)
+
+    def __len__(self):
+        return len(self._items)
+
+    def merge(self, activities):
+        """Add the activities that are not stored yet. Returns (added, already_stored).
+        An activity already stored keeps its saved coach feedback."""
+        added = already = 0
+        for activity in activities:
+            if activity.id in self._items:
+                already += 1
+            else:
+                self._items[activity.id] = activity
+                added += 1
+        return added, already
+
+    def find(self, activity_id):
+        return self._items.get(activity_id)
+
+    def all(self):
+        return sorted(self._items.values(), key=lambda a: (a.day, a.to_dict().get("start_time", "")))
+
+    def in_month(self, year, month):
+        return [a for a in self.all() if (a.day.year, a.day.month) == (year, month)]
+
+    def copy(self):
+        return ActivityLog(ImportedActivity(a.to_dict()) for a in self._items.values())
+
+    def to_list(self):
+        return [activity.to_dict() for activity in self.all()]
+
+    @classmethod
+    def from_list(cls, items):
+        """Rebuild from storage. One damaged entry is skipped (and logged) rather than throwing
+        away the rest of the user's data: imported history can always be imported again."""
+        if not isinstance(items, list):
+            raise ValueError("imported_activities must be a list")
+        activities = []
+        for item in items:
+            try:
+                activities.append(ImportedActivity.from_dict(item))
+            except ValueError as exc:
+                logger.error("Skipping a damaged imported activity: %s", exc)
+        return cls(activities)
 
 class SessionFilter(ABC):
 
@@ -292,6 +400,9 @@ class SessionHistory:
     def query(self, *filters):
         return [r for r in self._records if all(f.matches(r) for f in filters)]
 
+    def find(self, record_id):
+        return next((record for record in self._records if record.id == record_id), None)
+
     def to_list(self):
         return [record.to_dict() for record in self._records]
 
@@ -309,6 +420,7 @@ class DataManager:
         self._profile = None
         self._pending_session = None
         self._history = SessionHistory()  # composition: created and replaced here
+        self._imports = ActivityLog()     # composition: imported history (Strava), same lifecycle
 
     @classmethod
     def from_config(cls, config=None, clock=None):
@@ -356,19 +468,23 @@ class DataManager:
             raise ValueError("pending_session must be a dict or null")
         profile = Profile.from_dict(raw_profile) if raw_profile is not None else None
         history = SessionHistory.from_list(payload.get("sessions"))
+        imports = ActivityLog.from_list(payload.get("imported_activities") or [])   # absent in older files
         self._profile, self._pending_session, self._history = profile, copy.deepcopy(pending), history
+        self._imports = imports
 
     def _to_payload(self):
         return {
             "profile": self._profile.to_dict() if self._profile else None,
             "pending_session": copy.deepcopy(self._pending_session),
             "sessions": self._history.to_list(),
+            "imported_activities": self._imports.to_list(),
         }
 
     def _clear_state(self):
         self._profile = None
         self._pending_session = None
         self._history = SessionHistory()
+        self._imports = ActivityLog()
 
     def _save(self):
         return self._storage.save(self._to_payload())
@@ -387,8 +503,41 @@ class DataManager:
         self._pending_session = None
         return self._save()
 
+    def import_activities(self, activities):
+        """Store imported activity dicts, skipping ones already stored.
+        Returns (added, already_stored, saved). If saving fails nothing is kept in memory either,
+        so the screen never shows data that would vanish on the next start."""
+        records = [ImportedActivity.from_dict(item) for item in activities]
+        before = self._imports.copy()
+        added, already = self._imports.merge(records)
+        if added and not self._save():
+            self._imports = before
+            return 0, already, False
+        return added, already, True
+
+    def clear_imported(self):
+        """Remove every imported activity (logged sessions are kept). Returns True if saved."""
+        before = self._imports
+        self._imports = ActivityLog()
+        if not self._save():
+            self._imports = before
+            return False
+        return True
+
+    def attach_feedback(self, record_id, feedback):
+        """Save the coach's review on a logged session (int id) or an imported activity (str id)."""
+        record = self._history.find(record_id) or self._imports.find(record_id)
+        if record is None:
+            return False
+        previous = record.to_dict().get("coach_feedback")
+        record.set_feedback(feedback)
+        if not self._save():
+            record.set_feedback(previous)
+            return False
+        return True
+
     def reset(self):
-        
+
         if not self._storage.erase():
             return False
         self._clear_state()
@@ -404,6 +553,26 @@ class DataManager:
 
     def query_sessions(self, *filters):
         return [record.to_dict() for record in self._history.query(*filters)]
+
+    @property
+    def imported_count(self):
+        return len(self._imports)
+
+    def imported_activities(self):
+        return self._imports.to_list()
+
+    def imported_in_month(self, year, month):
+        return [activity.to_dict() for activity in self._imports.in_month(year, month)]
+
+    def find_record(self, record_id):
+        """(kind, dict) for a logged session ('session') or an imported activity ('imported'), else (None, None)."""
+        record = self._history.find(record_id)
+        if record is not None:
+            return "session", record.to_dict()
+        activity = self._imports.find(record_id)
+        if activity is not None:
+            return "imported", activity.to_dict()
+        return None, None
 
     def week_start(self, weeks_ago=0):
         """Monday of this week (0), last week (1), and so on."""

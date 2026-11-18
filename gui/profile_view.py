@@ -1,11 +1,13 @@
-"""Profile tab: editable profile (sliders, toggles, checkboxes, chips) and data reset."""
+"""Profile tab: editable profile (sliders, toggles, checkboxes, chips), Strava history import and data reset."""
+import asyncio
+
 import flet as ft
 
 from coach_service import (
     ACTIVITY_OPTIONS, EQUIPMENT_OPTIONS, FITNESS_LEVELS, PROFILE_LIMITS, SEX_OPTIONS,
 )
 from gui.base_view import AppView
-from gui.dialogs import ResetDialog
+from gui.dialogs import ConfirmDialog, ResetDialog, StravaHelpDialog
 from gui.theme import Palette, activity_icon
 from gui.widgets import LabeledSlider, field_border, heading, label, panel, primary_button, section
 
@@ -40,6 +42,9 @@ class ProfileView(AppView):
     def __init__(self, app):
         super().__init__(app)
         self._form = None          # the editable controls, kept between tab switches until saved
+        self._importing = False
+        self._last_import = None   # ImportSummary of the latest upload, shown under the button
+        self._import_body = ft.Column(spacing=10, tight=True)
 
     def build(self):
         if self._form is None:
@@ -126,6 +131,7 @@ class ProfileView(AppView):
             section("Activities you want to do",
                     ft.Row(list(self.activities.values()), wrap=True, spacing=8, run_spacing=8),
                     self._notes),
+            self._import_section(),
             self._errors,
             primary_button("Create profile" if is_new else "Save changes", ft.Icons.SAVE_OUTLINED,
                            on_click=self._save, expand=True),
@@ -153,6 +159,87 @@ class ProfileView(AppView):
                           horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             ], alignment=ft.MainAxisAlignment.SPACE_AROUND),
         ], spacing=12), border_color=Palette.ACCENT if is_new else None)
+
+    # ---------------------------------------------------------- Strava import
+    def _import_section(self):
+        self._render_import()
+        return section("Training history", self._import_body,
+                       trailing=ft.IconButton(ft.Icons.HELP_OUTLINE, tooltip="Where do I find this file?",
+                                              icon_color=Palette.ACCENT,
+                                              on_click=lambda e: StravaHelpDialog(self.app).open()))
+
+    def _render_import(self):
+        count, first, last = self.service.imported_overview()
+        if count:
+            status = "{} {} imported from Strava, {} to {}. They appear on the calendar.".format(
+                count, "activity" if count == 1 else "activities", first.strftime("%d %b %Y"),
+                last.strftime("%d %b %Y"))
+        else:
+            status = ("Already training on Strava? Upload activities.csv from your Strava archive to see "
+                      "your past activities and their stats on the calendar.")
+        controls = [ft.Row([ft.Icon(ft.Icons.HISTORY, size=18, color=Palette.IMPORTED),
+                            ft.Text(status, size=13, color=Palette.MUTED, expand=True)],
+                           vertical_alignment=ft.CrossAxisAlignment.START)]
+        if self._importing:
+            controls.append(ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2, color=Palette.ACCENT),
+                                    label("Reading your activities...", size=12, weight=ft.FontWeight.W_500)],
+                                   spacing=10))
+        else:
+            self.upload_button = ft.OutlinedButton(
+                "Upload Strava activities.csv", icon=ft.Icons.UPLOAD_FILE,
+                action=ft.PickFiles(self.app.file_picker, dialog_title="Choose activities.csv",
+                                    file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=["csv"],
+                                    with_data=True, cancel_upload_on_window_blur=False),
+                style=ft.ButtonStyle(color=Palette.ACCENT, side=ft.BorderSide(1, Palette.ACCENT)))
+            controls.append(self.upload_button)
+        if self._last_import is not None:
+            summary = self._last_import
+            controls.append(ft.Text(summary.message(), size=12,
+                                    color=Palette.ERROR if not summary.ok else Palette.TEXT))
+            for row, reason in summary.skipped[:3]:
+                controls.append(label("Row {}: {}".format(row, reason), size=11, weight=ft.FontWeight.W_500))
+        if count and not self._importing:
+            controls.append(ft.TextButton("Remove imported activities", icon=ft.Icons.DELETE_SWEEP_OUTLINED,
+                                          on_click=self._confirm_clear,
+                                          style=ft.ButtonStyle(color=Palette.MUTED)))
+        self._import_body.controls = controls
+
+    async def handle_picked_files(self, e):
+        """FilePicker.on_result: the browser has read the chosen file and sent its bytes."""
+        files = list(getattr(e, "files", None) or [])
+        if not files:
+            return                                    # the user closed the file dialog
+        chosen = files[0]
+        if not str(chosen.name or "").lower().endswith(".csv"):
+            self.app.notify("Choose the activities.csv file from inside the archive, not the .zip itself.",
+                            error=True)
+            return
+        if chosen.bytes is None:
+            self.app.notify("The browser could not read that file. Please try again.", error=True)
+            return
+        self._importing = True
+        self._render_import()
+        self.app.page.update()
+        try:
+            summary = await asyncio.to_thread(self.service.import_history, chosen.bytes, "strava")
+        finally:
+            self._importing = False
+        self._last_import = summary
+        self._render_import()
+        self.app.notify(summary.message(), error=not summary.ok)
+
+    def _confirm_clear(self, e):
+        def clear():
+            if self.service.clear_imported():
+                self._last_import = None
+                self._render_import()
+                self.app.notify("Imported activities removed. Your logged sessions are kept.")
+            else:
+                self.app.notify("Could not update your data file. Check file permissions.", error=True)
+        ConfirmDialog(self.app, "Remove imported activities?",
+                      "This removes every activity imported from Strava, and the coach feedback on them. "
+                      "Sessions you logged in AegisFit are kept. You can import the file again later.",
+                      "Remove", clear).open()
 
     def _danger_zone(self, is_new):
         if is_new:

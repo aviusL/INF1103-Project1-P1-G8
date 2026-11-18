@@ -442,12 +442,195 @@ class WeeklyReporter:
         return ProgressReport(current, previous, insights)
 
 
+# --------------------------------------------------------------------------- #
+# Session review: planned vs actual, worked out here; the AI only puts it into words
+# --------------------------------------------------------------------------- #
+DURATION_TOLERANCE = 0.10    # within 10% of the planned time counts as on plan
+HR_TOLERANCE_BPM = 8
+PACE_TOLERANCE_MIN = 0.15    # about 9 s/km
+EXPECTED_RPE = {'low': (1, 4), 'moderate': (4, 6), 'high': (7, 9)}
+ADHERENCE_LABELS = {
+    'on_plan': 'On plan',
+    'harder_than_planned': 'Harder than planned',
+    'easier_than_planned': 'Easier than planned',
+    'longer_than_planned': 'Longer than planned',
+    'shorter_than_planned': 'Shorter than planned',
+    'mixed': 'Mixed: some harder, some easier',
+    'no_plan': 'No plan to compare (imported)',
+}
+
+
+@dataclass(frozen=True)
+class ReviewCheck:
+    """One line of a session review. direction: 'over', 'under', 'on' or None (information only)."""
+    metric: str
+    planned: Optional[str]
+    actual: str
+    direction: Optional[str]
+    note: str
+    affects: str = 'intensity'          # 'intensity' or 'volume': what an over/under means
+
+    def to_dict(self):
+        return {'metric': self.metric, 'planned': self.planned, 'actual': self.actual,
+                'direction': self.direction, 'note': self.note}
+
+
+@dataclass(frozen=True)
+class SessionReview:
+    """How a session went against its plan (or on its own, for imported history)."""
+    adherence: str
+    checks: tuple
+    flags: tuple
+
+    @property
+    def label(self):
+        return ADHERENCE_LABELS.get(self.adherence, self.adherence)
+
+    def to_dict(self):
+        return {'adherence': self.adherence, 'adherence_label': self.label,
+                'checks': [check.to_dict() for check in self.checks], 'flags': list(self.flags)}
+
+
+def pace_text(minutes_per_km):
+    """6.5 -> '6:30 /km' (how runners read pace)."""
+    total = int(round(minutes_per_km * 60))
+    return f'{total // 60}:{total % 60:02d} /km'
+
+
+def _direction(actual, planned, tolerance):
+    if actual > planned + tolerance:
+        return 'over'
+    if actual < planned - tolerance:
+        return 'under'
+    return 'on'
+
+
+class ReviewCheckRule(ABC):
+    """Interface for one comparison in a session review. Add a subclass to compare something new."""
+
+    @abstractmethod
+    def check(self, planned, actual, max_hr) -> Optional[ReviewCheck]:
+        """planned may be None (imported history). Return None when there is nothing to compare."""
+
+
+class DurationCheck(ReviewCheckRule):
+    def check(self, planned, actual, max_hr):
+        done = _number(actual.get('duration_min'))
+        if done is None:
+            return None
+        target = _number((planned or {}).get('duration_min'))
+        if not target:
+            return ReviewCheck('Duration', None, f'{done:g} min', None, 'total moving time', 'volume')
+        direction = _direction(done, target, target * DURATION_TOLERANCE)
+        change = round(100 * (done / target - 1))
+        note = 'within 10% of the plan' if direction == 'on' else f'{abs(change)}% {"longer" if change > 0 else "shorter"} than planned'
+        return ReviewCheck('Duration', f'{target:g} min', f'{done:g} min', direction, note, 'volume')
+
+
+class HeartRateCheck(ReviewCheckRule):
+    def check(self, planned, actual, max_hr):
+        done = _number(actual.get('avg_hr_bpm'))
+        if done is None:
+            return None
+        share = f'{round(100 * done / max_hr)}% of your estimated max HR' if max_hr else 'average heart rate'
+        target = _number((planned or {}).get('target_hr_bpm'))
+        if target is None:
+            return ReviewCheck('Heart rate', None, f'{done:g} bpm', None, share)
+        direction = _direction(done, target, HR_TOLERANCE_BPM)
+        diff = round(done - target)
+        note = 'close to target' if direction == 'on' else f'{abs(diff)} bpm {"above" if diff > 0 else "below"} target; {share}'
+        return ReviewCheck('Heart rate', f'{target:g} bpm', f'{done:g} bpm', direction, note)
+
+
+class PaceCheck(ReviewCheckRule):
+    def check(self, planned, actual, max_hr):
+        done = _number(actual.get('avg_pace_min_per_km'))
+        if done is None:
+            return None
+        target = _number((planned or {}).get('target_pace_min_per_km'))
+        if target is None:
+            return ReviewCheck('Pace', None, pace_text(done), None, 'average pace')
+        # A faster pace is a lower number but a harder effort, so 'over' means faster.
+        direction = {'over': 'under', 'under': 'over', 'on': 'on'}[_direction(done, target, PACE_TOLERANCE_MIN)]
+        seconds = round(abs(done - target) * 60)
+        note = 'on target pace' if direction == 'on' else f'{seconds} s/km {"faster" if direction == "over" else "slower"} than target'
+        return ReviewCheck('Pace', pace_text(target), pace_text(done), direction, note)
+
+
+class EffortCheck(ReviewCheckRule):
+    def check(self, planned, actual, max_hr):
+        rpe = _number(actual.get('rpe'))
+        if rpe is None:
+            return None
+        intensity = (planned or {}).get('intensity')
+        if intensity not in EXPECTED_RPE:
+            return ReviewCheck('Effort', None, f'RPE {rpe:g}', None, 'how hard it felt')
+        low, high = EXPECTED_RPE[intensity]
+        direction = 'over' if rpe > high else 'under' if rpe < low else 'on'
+        note = {'on': f'as expected for {intensity} intensity',
+                'over': f'harder than a {intensity} session should feel (RPE {low}-{high})',
+                'under': f'easier than a {intensity} session should feel (RPE {low}-{high})'}[direction]
+        return ReviewCheck('Effort', f'{intensity} (RPE {low}-{high})', f'RPE {rpe:g}', direction, note)
+
+
+class SessionReviewer:
+    """Compares a plan with what was done using pluggable ReviewCheckRules (OCP), then names the
+    overall outcome. The coach's feedback text is written from this, so the numbers are never invented."""
+
+    def __init__(self, checks=None):
+        self._checks = list(checks) if checks is not None else [
+            DurationCheck(), HeartRateCheck(), PaceCheck(), EffortCheck(),
+        ]
+        if not all(isinstance(check, ReviewCheckRule) for check in self._checks):
+            raise TypeError('all review checks must implement ReviewCheckRule')
+
+    def review(self, planned, actual, profile):
+        actual = actual or {}
+        age = _number((profile or {}).get('age'))
+        max_hr = 220 - age if age else None
+        checks = tuple(c for c in (rule.check(planned, actual, max_hr) for rule in self._checks) if c)
+        return SessionReview(self._adherence(planned, checks), checks, self._flags(actual, max_hr))
+
+    @staticmethod
+    def _adherence(planned, checks):
+        if not planned:
+            return 'no_plan'
+        intensity = {c.direction for c in checks if c.affects == 'intensity' and c.direction in ('over', 'under')}
+        volume = next((c.direction for c in checks if c.affects == 'volume'), 'on')
+        if intensity == {'over', 'under'}:
+            return 'mixed'
+        if 'over' in intensity:
+            return 'harder_than_planned'
+        if 'under' in intensity:
+            return 'easier_than_planned'
+        return {'over': 'longer_than_planned', 'under': 'shorter_than_planned'}.get(volume, 'on_plan')
+
+    @staticmethod
+    def _flags(actual, max_hr):
+        flags = []
+        if actual.get('pain_reported') is True:
+            flags.append('Pain or discomfort was reported: rest or keep the next session easy, '
+                         'and see a professional if it continues.')
+        hr = _number(actual.get('avg_hr_bpm'))
+        if hr is not None and max_hr and hr > HR_CEILING_FRACTION * max_hr:
+            flags.append(f'Average heart rate was above 90% of your estimated max ({round(HR_CEILING_FRACTION * max_hr)} bpm).')
+        rpe = _number(actual.get('rpe'))
+        if rpe is not None and rpe >= HIGH_RPE:
+            flags.append(f'Effort was very high (RPE {rpe:g}); the coach will keep the next session easier.')
+        return tuple(flags)
+
+
 class LogicManager:
-    """Facade for other managers. Owns evaluator, validator and reporter (composition)."""
-    def __init__(self, rules=None, insights=None):
+    """Facade for other managers. Owns evaluator, validator, reporter and reviewer (composition)."""
+    def __init__(self, rules=None, insights=None, review_checks=None):
         self._evaluator = SessionEvaluator(rules)
         self._log_validator = SessionLogValidator()
         self._reporter = WeeklyReporter(insights)
+        self._reviewer = SessionReviewer(review_checks)
+
+    def review_session(self, planned, actual, profile):
+        """SessionReview of one session; planned=None for imported history."""
+        return self._reviewer.review(planned, actual, profile)
 
     def evaluate_session(self, session, profile, history, weekly_target=None):
         return self._evaluator.evaluate(EvaluationContext(session, profile, history, weekly_target))

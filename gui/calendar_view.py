@@ -1,4 +1,4 @@
-"""Calendar tab: month grid with completed (past) and planned (upcoming) sessions."""
+"""Calendar tab: month grid with completed, imported (Strava) and planned sessions."""
 import calendar
 import datetime
 
@@ -88,7 +88,10 @@ class CalendarView(AppView):
 
     def _legend(self):
         items = []
-        for status in ("done", "pain", "planned"):
+        statuses = ["done", "pain", "planned"]
+        if self.service.imported_count:
+            statuses.append("imported")
+        for status in statuses:
             items.append(ft.Row([ft.Container(width=8, height=8, border_radius=4, bgcolor=STATUS_COLORS[status]),
                                  label(STATUS_LABELS[status], size=11, weight=ft.FontWeight.W_500)], spacing=6))
         return ft.Row(items, alignment=ft.MainAxisAlignment.SPACE_AROUND, wrap=True)
@@ -102,9 +105,9 @@ class CalendarView(AppView):
         ], wrap=True, spacing=4)
 
     def _month_stats(self, events):
-        completed = [event for day_events in events.values() for event in day_events if event.status != "planned"]
-        minutes = sum(event.actual.get("duration_min") or 0 for event in completed)
-        efforts = [event.actual.get("rpe") for event in completed if isinstance(event.actual.get("rpe"), (int, float))]
+        completed = [event for day_events in events.values() for event in day_events if event.minutes is not None]
+        minutes = sum(event.minutes for event in completed)
+        efforts = [event.effort for event in completed if event.effort is not None]
         avg = "-" if not efforts else "{:.1f}".format(sum(efforts) / len(efforts))
         return panel(ft.Row([
             stat(len(completed), "Sessions", ft.Icons.CHECK_CIRCLE_OUTLINE),
@@ -181,7 +184,7 @@ class CalendarView(AppView):
                 ft.TextButton("Log it", icon=ft.Icons.CHECK,
                               on_click=lambda e: (self.app.close_dialog(), home.log_pending())),
             ]
-        SessionDetailDialog(self.app, event, extra).open()
+        SessionDetailDialog(self.app, event, extra, on_change=self.refresh).open()
 
     async def _plan_from_calendar(self, e):
         self.app.go(self.app.HOME)

@@ -1,10 +1,13 @@
-"""Pop-up dialogs: log a session, reject a suggestion, confirm, reset, pick a day, session details."""
+"""Pop-up dialogs: log a session, reject a suggestion, confirm, reset, pick a day, session details
+with coach feedback, and where to find a Strava export."""
+import asyncio
 import calendar
 import datetime
 import inspect
 
 import flet as ft
 
+from activity_import import STRAVA_HELP_URL
 from gui.theme import STATUS_COLORS, STATUS_LABELS, Palette
 from gui.widgets import LabeledSlider, activity_badge, detail_rows, field_border, heading, label, pill
 
@@ -293,12 +296,27 @@ class DayPickerDialog(BaseDialog):
 
 
 class SessionDetailDialog(BaseDialog):
-    """Details of any CalendarEvent (completed or planned) via its shared interface."""
+    """Details of any CalendarEvent (completed, imported or planned) via its shared interface.
 
-    def __init__(self, app, event, extra_actions=None):
+    For a session that has been done (event.can_review), it also shows the app's plan-vs-actual
+    comparison straight away, and a button that asks the AI coach for written feedback. The
+    feedback is saved with the session, so it is shown again next time without another request.
+    """
+
+    DIRECTION_STYLE = {          # direction -> (icon, colour attribute on Palette)
+        "on": (ft.Icons.CHECK_CIRCLE_OUTLINE, "DONE"),
+        "over": (ft.Icons.ARROW_UPWARD, "PAIN"),
+        "under": (ft.Icons.ARROW_DOWNWARD, "PLANNED"),
+    }
+
+    def __init__(self, app, event, extra_actions=None, on_change=None):
         super().__init__(app)
         self._event = event
         self._extra_actions = extra_actions or []
+        self._on_change = on_change
+        self._feedback = event.feedback
+        self._busy = False
+        self._feedback_area = ft.Column(spacing=10, tight=True)
 
     def title(self):
         return self._event.title.capitalize()
@@ -306,13 +324,152 @@ class SessionDetailDialog(BaseDialog):
     def content(self):
         event = self._event
         color = STATUS_COLORS[event.status]
-        return ft.Column([
+        parts = [
             ft.Row([activity_badge(event.activity, size=40),
-                    ft.Column([heading(event.day.strftime("%A %d %B"), size=15),
-                               pill(STATUS_LABELS[event.status], color)], spacing=4)], spacing=12),
+                    ft.Column([heading(event.day.strftime("%A %d %B %Y"), size=15),
+                               pill(STATUS_LABELS[event.status], color)], spacing=4, expand=True)], spacing=12),
             ft.Divider(color=Palette.BORDER),
             detail_rows(event.details()),
-        ], spacing=12, tight=True)
+        ]
+        if event.can_review:
+            parts += [ft.Divider(color=Palette.BORDER), self._review_section(), self._feedback_area]
+            self._render_feedback()
+        return ft.Column(parts, spacing=12, tight=True)
+
+    # ---- the app's own comparison (instant, no AI) ----
+    def _review_section(self):
+        review = self.app.service.review_event(self._event)
+        planned = review.adherence != "no_plan"
+        rows = [ft.Row([heading("Plan vs actual" if planned else "Session review", size=15),
+                        pill(review.label, Palette.ACCENT if review.adherence == "on_plan" else Palette.MUTED)],
+                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN, wrap=True)]
+        for check in review.checks:
+            rows.append(self._check_row(check))
+        for flag in review.flags:
+            rows.append(ft.Row([ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, size=16, color=Palette.PAIN),
+                                ft.Text(flag, size=12, color=Palette.PAIN, expand=True)],
+                               vertical_alignment=ft.CrossAxisAlignment.START))
+        if not review.checks:
+            rows.append(label("No numbers to compare for this session.", size=12, weight=ft.FontWeight.W_500))
+        return ft.Column(rows, spacing=8, tight=True)
+
+    def _check_row(self, check):
+        value = check.actual if not check.planned else "{} → {}".format(check.planned, check.actual)
+        icon = []
+        if check.direction in self.DIRECTION_STYLE:
+            name, colour = self.DIRECTION_STYLE[check.direction]
+            icon = [ft.Icon(name, size=16, color=getattr(Palette, colour))]
+        return ft.Row([
+            ft.Container(label(check.metric, size=12), width=86),
+            ft.Column([ft.Text(value, size=13, color=Palette.TEXT), label(check.note, size=11,
+                                                                         weight=ft.FontWeight.W_500)],
+                      spacing=1, expand=True),
+            *icon,
+        ], vertical_alignment=ft.CrossAxisAlignment.START)
+
+    # ---- the AI coach's written feedback ----
+    def _render_feedback(self, error=None):
+        controls = []
+        feedback = self._feedback
+        if feedback:
+            controls.append(self._feedback_card(feedback))
+        if error:
+            controls.append(ft.Text(error[0].upper() + error[1:], color=Palette.ERROR, size=12))
+        if self._busy:
+            controls.append(ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2, color=Palette.ACCENT),
+                                    label("The coach is reviewing this session...", size=12,
+                                          weight=ft.FontWeight.W_500)], spacing=10))
+        else:
+            self.feedback_button = ft.FilledButton(
+                "Regenerate feedback" if feedback else "Get coach feedback",
+                icon=ft.Icons.REFRESH if feedback else ft.Icons.AUTO_AWESOME,
+                on_click=self._ask_coach,
+                style=ft.ButtonStyle(bgcolor=Palette.ACCENT, color=Palette.ON_ACCENT))
+            controls.append(self.feedback_button)
+        self._feedback_area.controls = controls
+
+    def _feedback_card(self, feedback):
+        def bullets(title, items, icon, colour):
+            if not items:
+                return []
+            return [label(title, size=12)] + [
+                ft.Row([ft.Icon(icon, size=14, color=colour), ft.Text(item, size=13, expand=True)],
+                       vertical_alignment=ft.CrossAxisAlignment.START, spacing=8) for item in items]
+        generated = feedback.get("generated_on")
+        try:
+            generated = datetime.date.fromisoformat(generated).strftime("%d %b %Y")
+        except (TypeError, ValueError):
+            generated = None
+        return ft.Container(
+            ft.Column([
+                ft.Row([ft.Icon(ft.Icons.AUTO_AWESOME, size=16, color=Palette.ACCENT),
+                        heading("Coach feedback", size=14)], spacing=8),
+                ft.Text(feedback.get("summary", ""), size=13),
+                *bullets("What went well", feedback.get("went_well"), ft.Icons.CHECK, Palette.DONE),
+                *bullets("To work on", feedback.get("to_improve"), ft.Icons.TRENDING_UP, Palette.PAIN),
+                label("Next time", size=12),
+                ft.Text(feedback.get("next_time", ""), size=13),
+                label("Written {}".format(generated) if generated else "", size=11, weight=ft.FontWeight.W_500),
+            ], spacing=6, tight=True),
+            padding=12, border_radius=14, bgcolor=Palette.CARD_HIGH,
+        )
+
+    async def _ask_coach(self, e):
+        if self._busy:
+            return
+        self._busy = True
+        self._render_feedback()
+        self.app.page.update()
+        result = await asyncio.to_thread(self.app.service.session_feedback, self._event.record_id)
+        self._busy = False
+        error = None
+        if result.ok:
+            self._feedback = result.feedback
+            if not result.saved:
+                error = "the feedback could not be saved, so it will not be shown next time"
+            if self._on_change:
+                self._on_change()
+        else:
+            error = result.error
+        self._render_feedback(error)
+        self.app.page.update()
 
     def actions(self):
         return self._extra_actions + super().actions()
+
+
+class StravaHelpDialog(BaseDialog):
+    """The '?' next to the Strava import: where activities.csv comes from."""
+
+    STEPS = (
+        "On a computer, sign in at strava.com. Exporting only works on the website, not in the phone app.",
+        "Click your profile picture (top right), then Settings, then My Account.",
+        "Under 'Download or Delete Your Account', click Get Started, then 'Request your archive'.",
+        "Strava emails you a download link. This can take a few hours, sometimes longer.",
+        "Download the .zip file and unzip it. Inside is a file called activities.csv: upload that file here.",
+    )
+
+    def title(self):
+        return "Where do I find activities.csv?"
+
+    def content(self):
+        steps = [
+            ft.Row([
+                ft.Container(ft.Text(str(number), size=12, weight=ft.FontWeight.W_700, color=Palette.ON_ACCENT),
+                             width=24, height=24, border_radius=12, bgcolor=Palette.ACCENT,
+                             alignment=ft.Alignment.CENTER),
+                ft.Text(text, size=13, expand=True),
+            ], vertical_alignment=ft.CrossAxisAlignment.START, spacing=10)
+            for number, text in enumerate(self.STEPS, start=1)
+        ]
+        return ft.Column([
+            label("Your Strava archive holds every activity you have recorded.", size=12,
+                  weight=ft.FontWeight.W_500),
+            *steps,
+            ft.Divider(color=Palette.BORDER),
+            label("Uploading a newer archive later only adds the activities you do not have yet. "
+                  "Imported activities are not sent to the AI coach unless you ask for feedback on one.",
+                  size=12, weight=ft.FontWeight.W_500),
+            ft.OutlinedButton("Open Strava's export guide", icon=ft.Icons.OPEN_IN_NEW,
+                              action=ft.OpenUrl(STRAVA_HELP_URL, target=ft.UrlTarget.BLANK)),
+        ], spacing=12, tight=True)
